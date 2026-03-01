@@ -1,9 +1,5 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 48 vCPU ENTERPRISE ENGINE (SOTA V8.1 PERFECTED)
-# ==============================================================================
-# INSTRUCTIONS: Save this exact code as "train_bot.py" and run it from the 
-# terminal using: python train_bot.py
-# Do NOT run this inside a Jupyter cell or Google Colab block directly!
+# SOTA ROCKET LEAGUE AI - THE 96GB "MEGA-BRAIN" ENGINE (SOTA V9)
 # ==============================================================================
 import os
 import re
@@ -13,7 +9,6 @@ import random
 import warnings
 import traceback
 
-# Hide standard PyTorch/Jupyter deprecation clutter
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 # 🛑 CRITICAL FIX 1: KILL "THREAD BOMB" (CPU Contention Fix) 🛑
@@ -40,36 +35,21 @@ from rlgym_ppo import Learner
 torch.set_num_threads(1)
 
 # ------------------------------------------------------------------------------
-# 1. FILE SYSTEM SANITIZATION (The V8 Reverter)
+# 1. FILE SYSTEM SANITIZATION
 # ------------------------------------------------------------------------------
 def revert_collision_meshes():
-    """Undoes the V7 zero-padding to prevent the C++ infinite broadphase loop."""
-    print("🔧 Scanning directories to revert sabotaged collision meshes...")
     search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
-    try:
-        search_dirs.append(os.path.dirname(rlgym_sim.__file__))
-    except NameError:
-        pass
+    try: search_dirs.append(os.path.dirname(rlgym_sim.__file__))
+    except NameError: pass
 
-    reverted_count = 0
     for d in search_dirs:
         if not os.path.exists(d): continue
         for root, _, files in os.walk(d):
             for filename in files:
-                # Look for the damaged zero-padded files (mesh_00.cmf -> mesh_09.cmf)
                 match = re.match(r"^mesh_0(\d)\.cmf$", filename)
                 if match:
-                    old_path = os.path.join(root, filename)
-                    new_filename = f"mesh_{match.group(1)}.cmf"
-                    new_path = os.path.join(root, new_filename)
-                    try:
-                        os.rename(old_path, new_path)
-                        reverted_count += 1
-                        print(f"   -> Reverted Mesh Order: {filename} -> {new_filename}")
-                    except OSError:
-                        pass
-    if reverted_count > 0:
-        print(f"✅ Successfully restored {reverted_count} meshes. C++ Physics will load correctly!\n")
+                    try: os.rename(os.path.join(root, filename), os.path.join(root, f"mesh_{match.group(1)}.cmf"))
+                    except OSError: pass
 
 # ------------------------------------------------------------------------------
 # 2. ACTION PARSER (Lag-Free Lookup & NaN-Guarded)
@@ -122,10 +102,16 @@ class SOTAActionParser(ActionParser):
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. OBSERVATION BUILDER (With Infinity-Guard)
+# 3. 🧠 THE MEGA-BRAIN: TEMPORAL FRAME STACKING 🧠
 # ------------------------------------------------------------------------------
-class SOTAObservation(ObsBuilder):
-    def reset(self, initial_state: GameState): pass
+class TemporalMemoryObservation(ObsBuilder):
+    def __init__(self, history_size=3):
+        super().__init__()
+        self.history_size = history_size
+        self.memory_banks = {}
+
+    def reset(self, initial_state: GameState): 
+        self.memory_banks.clear()
 
     def build_obs(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> np.ndarray:
         if player.team_num == 1: car, ball = player.inverted_car_data, state.inverted_ball
@@ -165,13 +151,28 @@ class SOTAObservation(ObsBuilder):
         ]
         
         obs.extend(np.atleast_1d(previous_action).tolist())
-        obs_arr = np.array(obs, dtype=np.float32)
+        
+        # 🧠 INJECT TEMPORAL MEMORY
+        # We store the last 3 physics ticks to build temporal trajectory understanding
+        cid = player.car_id
+        if cid not in self.memory_banks:
+            self.memory_banks[cid] = [obs] * self.history_size
+        
+        self.memory_banks[cid].pop(0)
+        self.memory_banks[cid].append(obs)
+        
+        temporal_obs = []
+        for historical_frame in self.memory_banks[cid]:
+            temporal_obs.extend(historical_frame)
+            
+        obs_arr = np.array(temporal_obs, dtype=np.float32)
         if not np.isfinite(obs_arr).all():
             obs_arr = np.nan_to_num(obs_arr)
+            
         return obs_arr
 
 # ------------------------------------------------------------------------------
-# 4. FAST-MATH REWARD SHAPING (With NaN returns blocked)
+# 4. FAST-MATH REWARD SHAPING
 # ------------------------------------------------------------------------------
 class CompoundAerialReward(RewardFunction):
     def __init__(self): self.air_time = {}
@@ -289,7 +290,6 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # 🛑 CRITICAL SYNTAX FIX: CombinedReward requires exactly TWO tuples 🛑
     reward_fn = CombinedReward(
         (
             CompoundAerialReward(),
@@ -303,13 +303,13 @@ def build_env():
     
     return rlgym_sim.make(
         tick_skip=8, team_size=1, spawn_opponents=True,
-        reward_fn=reward_fn, obs_builder=SOTAObservation(),
+        reward_fn=reward_fn, obs_builder=TemporalMemoryObservation(history_size=3),
         action_parser=SOTAActionParser(), state_setter=EscalateMutator(),
         terminal_conditions=[TimeoutCondition(400), GoalScoredCondition()]
     )
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V8 MAIN PPO ENGINE (BYPASSING THE SUICIDE SWITCH)
+# 7. SOTA V9 MAIN PPO ENGINE (SATURATING BLACKWELL & EPYC)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -318,25 +318,24 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
         
-    # Revert your CMF files to their default names to fix the RocketSim C++ Bug!
     revert_collision_meshes()
 
-    print("🚀 Initializing 48 vCPU SOTA AI Engine (Anti-Lag Architecture)...")
+    print("🚀 Initializing Blackwell 'Mega-Brain' SOTA Architecture...")
     
-    # 💡 DRY-RUN: Catch errors safely BEFORE spawning 22 background workers
-    print("🧪 Performing synchronous dry-run of build_env()...")
     try:
         temp_env = build_env()
         obs_size = len(temp_env.reset()[0])
         temp_env.close()
-        print("✅ Environment built successfully! Spawning workers...\n")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed before multiprocessing could start!\n{traceback.format_exc()}")
         sys.exit(1)
 
-    WORKER_CORES = 22
-    GLOBAL_BATCH_SIZE = 99_000
-    TOTAL_ITERS = 500
+    # 🛑 1. EPYC SATURATION: Force 44 Cores to run 88 Agents in the Digital Colosseum
+    WORKER_CORES = 44 
+    
+    # Expanding the batch size slightly to accommodate the new 44 workers
+    GLOBAL_BATCH_SIZE = 150_000
+    TOTAL_ITERS = 1000
     
     learner = Learner(
         build_env,
@@ -344,28 +343,29 @@ if __name__ == "__main__":
         ppo_batch_size=GLOBAL_BATCH_SIZE,
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=GLOBAL_BATCH_SIZE * 3, 
-        ppo_minibatch_size=33_000, 
+        ppo_minibatch_size=50_000, 
         ppo_ent_coef=0.01,
         policy_lr=1e-4,
         critic_lr=1e-4,
         ppo_epochs=10,
+        
+        # 🛑 2. THE MEGA-BRAIN: Multi-Million Parameter Architecture for Blackwell
+        policy_layer_sizes=(2048, 2048, 1024, 1024),
+        critic_layer_sizes=(2048, 2048, 1024, 1024),
+        
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
     )
 
-    # 🛑 COMPLETELY BYPASS `learner.learn()` TO PREVENT WORKER SUICIDE 🛑
     try:
-        for i in tqdm(range(TOTAL_ITERS), desc="Training Rocket League Bot", file=sys.stdout):
+        for i in tqdm(range(TOTAL_ITERS), desc="Training SOTA Mega-Brain", file=sys.stdout):
             
-            # 1. Manually command the Agent Manager to collect experience
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
-            # 2. Feed the PPO Engine safely
             learner.add_new_experience(experience)
             learner.ppo_learner.learn(learner.experience_buffer)
             learner.agent.cumulative_timesteps += steps
             
-            # 3. Apply your dynamic LR & Entropy Decays
             progress = (i + 1) / TOTAL_ITERS
             new_lr = 1e-4 - ((1e-4 - 5e-6) * progress)
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
@@ -383,12 +383,10 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n🚨 CRASH DURING TRAINING:\n{traceback.format_exc()}")
     finally:
-        # Gracefully kill the 22 workers once training is ACTUALLY done
         learner.cleanup()
 
     print("\n🔥 Training Concluded! Quantizing weights to ONNX...")
     
-    # Exporting the weights securely
     try:
         if hasattr(learner, 'ppo_learner'): policy = learner.ppo_learner.policy
         else: policy = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
@@ -398,7 +396,7 @@ if __name__ == "__main__":
     policy.eval().to("cpu")
     
     dummy_input = torch.randn(1, obs_size, dtype=torch.float32)
-    export_path = "SOTA_RLBot_V8_Agent_48Core.onnx"
+    export_path = "SOTA_RLBot_V9_MegaBrain_Agent.onnx"
     
     try:
         torch.onnx.export(
@@ -408,4 +406,4 @@ if __name__ == "__main__":
         )
         print(f"✅ Weights saved safely -> {export_path}")
     except Exception as e:
-        print(f"❌ Failed to export ONNX. The network was trained successfully, but export failed: {e}")
+        print(f"❌ Failed to export ONNX: {e}")
