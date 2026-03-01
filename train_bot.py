@@ -1,5 +1,5 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 48 vCPU ENTERPRISE ENGINE (SOTA V8 PERFECTED)
+# SOTA ROCKET LEAGUE AI - 48 vCPU ENTERPRISE ENGINE (SOTA V8.1 PERFECTED)
 # ==============================================================================
 # INSTRUCTIONS: Save this exact code as "train_bot.py" and run it from the 
 # terminal using: python train_bot.py
@@ -45,7 +45,7 @@ torch.set_num_threads(1)
 def revert_collision_meshes():
     """Undoes the V7 zero-padding to prevent the C++ infinite broadphase loop."""
     print("🔧 Scanning directories to revert sabotaged collision meshes...")
-    search_dirs = [".", "collision_meshes"]
+    search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
     try:
         search_dirs.append(os.path.dirname(rlgym_sim.__file__))
     except NameError:
@@ -289,13 +289,18 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 CRITICAL SYNTAX FIX: CombinedReward requires exactly TWO tuples 🛑
     reward_fn = CombinedReward(
-        (CompoundAerialReward(), 2.0),
-        (DynamicTouchReward(), 4.0),
-        (VectorAlignmentReward(), 1.0),
-        (KinestheticShadowDefense(), 1.5),
-        (BackwardVelocityPenalty(), 0.5)
+        (
+            CompoundAerialReward(),
+            DynamicTouchReward(),
+            VectorAlignmentReward(),
+            KinestheticShadowDefense(),
+            BackwardVelocityPenalty()
+        ),
+        (2.0, 4.0, 1.0, 1.5, 0.5)
     )
+    
     return rlgym_sim.make(
         tick_skip=8, team_size=1, spawn_opponents=True,
         reward_fn=reward_fn, obs_builder=SOTAObservation(),
