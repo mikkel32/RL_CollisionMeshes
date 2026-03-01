@@ -1,5 +1,5 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V13)
+# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V13.1)
 # 40-Core Unleashed / Python GC Thrashing Eliminated
 # ==============================================================================
 import os
@@ -34,6 +34,8 @@ from rlgym_sim.utils.reward_functions import RewardFunction, CombinedReward
 from rlgym_sim.utils.state_setters import StateSetter, StateWrapper, DefaultState
 from rlgym_ppo import Learner
 
+# 🛑 RESTORED MISSING IMPORTS HERE 🛑
+from rlgym_sim.utils.terminal_conditions.common_conditions import TimeoutCondition, GoalScoredCondition
 from rlgym_sim.utils.reward_functions.common_rewards import EventReward, VelocityBallToGoalReward
 
 torch.set_num_threads(1)
@@ -364,7 +366,7 @@ def build_env():
     )
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V13 MAIN PPO ENGINE (THE 150K SPS UNLEASH)
+# 7. SOTA V13.1 MAIN PPO ENGINE (THE 150K SPS UNLEASH)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -375,12 +377,13 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V13)...")
+    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V13.1)...")
     
     try:
         temp_env = build_env()
         obs_size = len(temp_env.reset()[0])
         temp_env.close()
+        print("✅ Environment successfully built & dry-run passed!")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed before multiprocessing could start!\n{traceback.format_exc()}")
         sys.exit(1)
@@ -389,7 +392,6 @@ if __name__ == "__main__":
     WORKER_CORES = 40 
     
     # 🛑 THE OPTIMIZED PIPELINE 🛑
-    # Updates the brain every ~2-3 seconds instead of every 90 seconds!
     GLOBAL_BATCH_SIZE = 300_000 
     MINI_BATCH = 50_000 
     TOTAL_ITERS = 20_000 
@@ -427,8 +429,6 @@ if __name__ == "__main__":
             learner.ppo_learner.learn(learner.experience_buffer)
             learner.agent.cumulative_timesteps += steps
             
-            # (Notice: manual buffer clearance removed to completely eliminate Python GC drag!)
-            
             progress = (i + 1) / TOTAL_ITERS
             new_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
@@ -459,7 +459,7 @@ if __name__ == "__main__":
     policy.eval().to("cpu")
     
     dummy_input = torch.randn(1, obs_size, dtype=torch.float32)
-    export_path = "SOTA_RLBot_V13_Absolute_Engine.onnx"
+    export_path = "SOTA_RLBot_V13.1_Absolute_Engine.onnx"
     
     try:
         torch.onnx.export(
