@@ -1,5 +1,5 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - THE 96GB "MEGA-BRAIN" ENGINE (SOTA V9)
+# SOTA ROCKET LEAGUE AI - GRAND CHAMPION EDITION (SOTA V10)
 # ==============================================================================
 import os
 import re
@@ -31,6 +31,9 @@ from rlgym_sim.utils.reward_functions import RewardFunction, CombinedReward
 from rlgym_sim.utils.state_setters import StateSetter, StateWrapper, DefaultState
 from rlgym_sim.utils.terminal_conditions.common_conditions import TimeoutCondition, GoalScoredCondition
 from rlgym_ppo import Learner
+
+# 🛑 IMPORTING MACRO-OBJECTIVE REWARDS (Fix 2: The Pacifist Bug)
+from rlgym_sim.utils.reward_functions.common_rewards import EventReward, VelocityBallToGoalReward
 
 torch.set_num_threads(1)
 
@@ -152,8 +155,6 @@ class TemporalMemoryObservation(ObsBuilder):
         
         obs.extend(np.atleast_1d(previous_action).tolist())
         
-        # 🧠 INJECT TEMPORAL MEMORY
-        # We store the last 3 physics ticks to build temporal trajectory understanding
         cid = player.car_id
         if cid not in self.memory_banks:
             self.memory_banks[cid] = [obs] * self.history_size
@@ -247,6 +248,21 @@ class BackwardVelocityPenalty(RewardFunction):
             return rew if not math.isnan(rew) else 0.0
         return 0.0
 
+# 🛑 CRITICAL FIX 4: NON-LINEAR BOOST REWARD 🛑
+class BoostDifferenceReward(RewardFunction):
+    def __init__(self): self.last_boost = {}
+    def reset(self, initial_state: GameState): self.last_boost.clear()
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        cid = player.car_id
+        current_boost = player.boost_amount
+        last_boost = self.last_boost.get(cid, current_boost)
+        self.last_boost[cid] = current_boost
+        
+        # Only reward pickups (Non-linear scaling: High reward for grabbing boost when empty)
+        if current_boost > last_boost: 
+            return float(math.sqrt(current_boost) - math.sqrt(last_boost))
+        return 0.0
+
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS (Anti-Telefrag Architecture)
 # ------------------------------------------------------------------------------
@@ -254,6 +270,7 @@ class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
         scenario = random.random()
         
+        # 1. Aerial Intercept
         if scenario < 0.25:
             wrapper.ball.set_pos(0.0, 0.0, random.uniform(1200, 1800))
             wrapper.ball.set_lin_vel(0.0, 0.0, 0.0)
@@ -265,6 +282,7 @@ class EscalateMutator(StateSetter):
                 car.set_lin_vel(0.0, 0.0, 0.0)
                 car.boost = 1.0
                 
+        # 2. Wall-to-Air Dribble
         elif scenario < 0.50:
             side = random.choice([-1.0, 1.0])
             for car in wrapper.cars:
@@ -275,6 +293,20 @@ class EscalateMutator(StateSetter):
                 car.boost = 1.0
             wrapper.ball.set_pos(3000.0 * side, 100.0, 900.0)
             wrapper.ball.set_lin_vel(0.0, 1500.0, 600.0)
+            
+        # 🛑 CRITICAL FIX 3: THE RECOVERY & WAVE-DASH MUTATOR 🛑
+        elif scenario < 0.75:
+            wrapper.ball.set_pos(0.0, 0.0, 100.0)
+            wrapper.ball.set_lin_vel(0.0, 0.0, 0.0)
+            for car in wrapper.cars:
+                # Spawn high in the air, completely misaligned
+                car.set_pos(random.uniform(-3000, 3000), random.uniform(-4000, 4000), random.uniform(500, 1500))
+                # Violent randomized tumbling
+                car.set_rot(random.uniform(-math.pi, math.pi), random.uniform(-math.pi, math.pi), random.uniform(-math.pi, math.pi))
+                car.set_ang_vel(random.uniform(-5, 5), random.uniform(-5, 5), random.uniform(-5, 5))
+                car.boost = random.uniform(0.0, 0.5)
+                
+        # 4. Standard Kickoff
         else:
             DefaultState().reset(wrapper)
             
@@ -290,15 +322,19 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 CRITICAL FIX 2: THE MACRO-OBJECTIVE INJECTION 🛑
     reward_fn = CombinedReward(
         (
-            CompoundAerialReward(),
-            DynamicTouchReward(),
-            VectorAlignmentReward(),
-            KinestheticShadowDefense(),
-            BackwardVelocityPenalty()
+            EventReward(goal=10.0, concede=-10.0), # Win the game
+            VelocityBallToGoalReward(),            # Sustained offensive pressure
+            CompoundAerialReward(),                # Aerial mastery
+            DynamicTouchReward(),                  # Powerful touches
+            VectorAlignmentReward(),               # Positional tracking
+            KinestheticShadowDefense(),            # Defensive rotation
+            BackwardVelocityPenalty(),             # Stop reversing
+            BoostDifferenceReward()                # Boost pathing
         ),
-        (2.0, 4.0, 1.0, 1.5, 0.5)
+        (1.0, 0.1, 2.0, 4.0, 1.0, 1.5, 0.5, 1.0)   # Balanced weights
     )
     
     return rlgym_sim.make(
@@ -309,7 +345,7 @@ def build_env():
     )
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V9 MAIN PPO ENGINE (SATURATING BLACKWELL & EPYC)
+# 7. SOTA V10 MAIN PPO ENGINE (LATENCY INOCULATED)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -320,7 +356,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing Blackwell 'Mega-Brain' SOTA Architecture...")
+    print("🚀 Initializing SOTA V10 Engine (Sim-to-Real Inoculated)...")
     
     try:
         temp_env = build_env()
@@ -330,11 +366,11 @@ if __name__ == "__main__":
         print(f"🚨 FATAL: build_env() crashed before multiprocessing could start!\n{traceback.format_exc()}")
         sys.exit(1)
 
-    # 🛑 1. EPYC SATURATION: Force 44 Cores to run 88 Agents in the Digital Colosseum
+    # 44 Worker Cores running 88 total parallel networks
     WORKER_CORES = 44 
     
-    # Expanding the batch size slightly to accommodate the new 44 workers
-    GLOBAL_BATCH_SIZE = 150_000
+    # 📈 CPUs Run Longer: Increased batch size for massive, unbroken GPU data feeds!
+    GLOBAL_BATCH_SIZE = 250_000
     TOTAL_ITERS = 1000
     
     learner = Learner(
@@ -349,16 +385,18 @@ if __name__ == "__main__":
         critic_lr=1e-4,
         ppo_epochs=10,
         
-        # 🛑 2. THE MEGA-BRAIN: Multi-Million Parameter Architecture for Blackwell
-        policy_layer_sizes=(2048, 2048, 1024, 1024),
-        critic_layer_sizes=(2048, 2048, 1024, 1024),
+        # 🛑 CRITICAL FIX 1: THE INFERENCE LATENCY FIX 🛑
+        # Massive enough for complex logic, small enough for blazing CPU throughput 
+        # and <2ms live consumer inference! (~1.4 Million Parameters instead of 16M)
+        policy_layer_sizes=(512, 512, 512, 512),
+        critic_layer_sizes=(512, 512, 512, 512),
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
     )
 
     try:
-        for i in tqdm(range(TOTAL_ITERS), desc="Training SOTA Mega-Brain", file=sys.stdout):
+        for i in tqdm(range(TOTAL_ITERS), desc="Training SOTA Flawless Bot", file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
@@ -396,7 +434,7 @@ if __name__ == "__main__":
     policy.eval().to("cpu")
     
     dummy_input = torch.randn(1, obs_size, dtype=torch.float32)
-    export_path = "SOTA_RLBot_V9_MegaBrain_Agent.onnx"
+    export_path = "SOTA_RLBot_V10_Flawless.onnx"
     
     try:
         torch.onnx.export(
