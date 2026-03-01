@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V13.2)
-# 40-Core Unleashed / Python GC Thrashing Eliminated / Bug-Free
+# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V14)
+# 40-Core / Google Drive Cloud Save / Bulletproof Deployment
 # ==============================================================================
 import os
 import re
@@ -56,7 +56,7 @@ INV_1_75 = 1.0 / 1.75
 INV_3000 = 1.0 / 3000.0
 
 # ------------------------------------------------------------------------------
-# 1. FILE SYSTEM SANITIZATION
+# 1. FILE SYSTEM SANITIZATION & CLOUD SAVE SETUP
 # ------------------------------------------------------------------------------
 def revert_collision_meshes():
     search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
@@ -184,7 +184,9 @@ class TemporalMemoryObservation(ObsBuilder):
             if prev_act.size == 8:
                 obs.extend(prev_act.flatten().tolist())
             elif prev_act.size == 1:
-                obs.extend(self.action_parser._lookup_table[int(prev_act.item())].tolist())
+                idx = int(prev_act.item())
+                idx = max(0, min(idx, len(self.action_parser._lookup_table) - 1)) # Failsafe clamp
+                obs.extend(self.action_parser._lookup_table[idx].tolist())
             else:
                 obs.extend([0.0] * 8)
         except Exception:
@@ -373,7 +375,7 @@ def build_env():
     )
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V13.2 MAIN PPO ENGINE (THE 150K SPS UNLEASH)
+# 7. SOTA V14 MAIN PPO ENGINE (DRIVE SAVING & FAILSAFES)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -384,7 +386,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V13.2)...")
+    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V14)...")
     
     try:
         temp_env = build_env()
@@ -396,10 +398,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     WORKER_CORES = 40 
-    
     GLOBAL_BATCH_SIZE = 300_000 
     MINI_BATCH = 50_000 
-    TOTAL_ITERS = 20_000 
+    
+    # 🛑 USER REQUEST: Reduced to precisely 2,000 iterations 
+    TOTAL_ITERS = 2000 
     
     learner = Learner(
         build_env,
@@ -407,26 +410,22 @@ if __name__ == "__main__":
         ppo_batch_size=GLOBAL_BATCH_SIZE,
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         
-        # 3x buffer prevents Catastrophic Forgetting
-        exp_buffer_size=GLOBAL_BATCH_SIZE * 3, 
+        # 🛑 FIX: Exactly 1:1 mapped to batch size to prevent On-Policy data poison
+        exp_buffer_size=GLOBAL_BATCH_SIZE, 
         
         ppo_minibatch_size=MINI_BATCH, 
         ppo_ent_coef=0.01,
         policy_lr=2e-4,
         critic_lr=2e-4,
         ppo_epochs=10,
-        
-        # The Perfect Sim-to-Real Network. 
-        # Halves the math load, guarantees zero frame-drops in RLBot live environment.
         policy_layer_sizes=(512, 512, 512),
         critic_layer_sizes=(512, 512, 512),
-        
         device="cuda" if torch.cuda.is_available() else "cpu",
-        log_to_wandb=False # Set to True if tracking online!
+        log_to_wandb=False
     )
 
     try:
-        for i in tqdm(range(TOTAL_ITERS), desc="Training 150k SPS Bot", file=sys.stdout):
+        for i in tqdm(range(TOTAL_ITERS), desc="Training GC Bot (2k Iters)", file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
@@ -434,6 +433,7 @@ if __name__ == "__main__":
             learner.ppo_learner.learn(learner.experience_buffer)
             learner.agent.cumulative_timesteps += steps
             
+            # Decay math automatically adapts to the 2,000 threshold
             progress = (i + 1) / TOTAL_ITERS
             new_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
@@ -445,6 +445,16 @@ if __name__ == "__main__":
             
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
+
+            # 🛑 CLOUD CHECKPOINTING: Saves progress every 500 iterations
+            if (i + 1) % 500 == 0:
+                try:
+                    ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
+                    os.makedirs(ckpt_dir, exist_ok=True)
+                    learner.save(os.path.join(ckpt_dir, f"ckpt_{i+1}"))
+                    print(f"\n💾 Cloud Backup Secure: Iteration {i+1} saved to Google Drive.")
+                except Exception as e:
+                    print(f"\n⚠️ Warning: Failed to save checkpoint to Drive: {e}")
 
     except KeyboardInterrupt:
         print("\n🛑 Training interrupted safely.")
@@ -462,16 +472,35 @@ if __name__ == "__main__":
         policy = learner.agent.policy.actor
         
     policy.eval().to("cpu")
-    
     dummy_input = torch.randn(1, obs_size, dtype=torch.float32)
-    export_path = "SOTA_RLBot_V13.2_Absolute_Engine.onnx"
+    
+    # 🛑 THE UNKILLABLE EXPORT PROTOCOL 🛑
+    save_dir = "/content/drive/MyDrive/RocketLeagueModel"
+    export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V14.onnx")
+    export_path_fallback = "SOTA_RLBot_V14_FALLBACK.onnx"
     
     try:
+        # Create directory automatically if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
         torch.onnx.export(
-            policy, dummy_input, export_path,
+            policy, dummy_input, export_path_drive,
             export_params=True, opset_version=14, do_constant_folding=True,
             input_names=['observation'], output_names=['action_logits']
         )
-        print(f"✅ Weights saved safely -> {export_path}")
-    except Exception as e:
-        print(f"❌ Failed to export ONNX: {e}")
+        print(f"✅ FINAL WEIGHTS EXPORTED SAFELY TO GOOGLE DRIVE -> {export_path_drive}")
+        
+    except Exception as e_drive:
+        print(f"\n⚠️ WARNING: Google Drive export failed! (Did the drive unmount?)")
+        print(f"Drive Error Details: {e_drive}")
+        print("🔄 Executing Local Colab Backup Save...")
+        
+        try:
+            torch.onnx.export(
+                policy, dummy_input, export_path_fallback,
+                export_params=True, opset_version=14, do_constant_folding=True,
+                input_names=['observation'], output_names=['action_logits']
+            )
+            print(f"✅ CRISIS AVERTED: Weights saved locally -> {export_path_fallback}")
+            print("❗ IMPORTANT: Download this file manually from Colab before closing!")
+        except Exception as e_local:
+            print(f"❌ FATAL: Both exports failed! Final error: {e_local}")
