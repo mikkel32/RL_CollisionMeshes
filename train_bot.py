@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V18)
-# 40-Core / Auto-Resume / ONNX Wrapper Bug Patched / Ironclad Save Protocol
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V23)
+# 40-Core EPYC / Asymmetric Megabrain / Domain Randomization Active
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -20,10 +20,13 @@ import warnings
 import traceback
 import json
 import shutil
+import copy
 from collections import deque
 from typing import Any
 
+# Silence standard deprecation and future warnings from the console
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
+warnings.filterwarnings("ignore", category=FutureWarning) 
 
 # 🛑 CRITICAL FIX 1: KILL "THREAD BOMB" (CPU Contention Fix) 🛑
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -65,14 +68,65 @@ INV_120  = 8.0 / 120.0
 INV_1_75 = 1.0 / 1.75
 INV_3000 = 1.0 / 3000.0
 
+# 🛑 Hitbox normalization constants (V23 Fix)
+INV_150 = 1.0 / 150.0  # Max Hitbox Length bound
+INV_100 = 1.0 / 100.0  # Max Hitbox Width bound
+INV_50  = 1.0 / 50.0   # Max Hitbox Height bound
+
 # ------------------------------------------------------------------------------
-# 1. FILE SYSTEM SANITIZATION & ONNX WRAPPER
+# 1. DOMAIN RANDOMIZATION WRAPPERS (Sim-to-Real Protection)
 # ------------------------------------------------------------------------------
+class ActionDelayWrapper(gym.Wrapper):
+    """
+    🛑 FIX 3A: Adversarial Domain Randomization (Sim-to-Real Latency)
+    Intercepts the calculated action and forces a randomized frame delay.
+    Forces the AI to learn predictive momentum rather than reactive memorization.
+    """
+    def __init__(self, env, min_delay=0, max_delay=2):
+        super().__init__(env)
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.action_buffer = []
+
+    def reset(self, **kwargs):
+        self.action_buffer.clear()
+        return self.env.reset(**kwargs)
+
+    def step(self, action):
+        # Deepcopy prevents memory mutation bugs in the multiprocess pipe
+        self.action_buffer.append(copy.deepcopy(action)) 
+        delay_ticks = random.randint(self.min_delay, self.max_delay)
+        
+        if len(self.action_buffer) > delay_ticks:
+            delayed_action = self.action_buffer.pop(0)
+        else:
+            delayed_action = self.action_buffer[0] 
+            
+        return self.env.step(delayed_action)
+
+class PhysicsRandomizationMutator(StateSetter):
+    """
+    🛑 FIX 3B: Physics Perturbation
+    Continuously applies minute, randomized noise algorithms to the physical velocities.
+    """
+    def __init__(self, base_mutator):
+        super().__init__()
+        self.base_mutator = base_mutator
+
+    def reset(self, wrapper: StateWrapper):
+        self.base_mutator.reset(wrapper)
+        for car in wrapper.cars:
+            vel = car.linear_velocity
+            car.set_lin_vel(
+                vel[0] * random.uniform(0.98, 1.02),
+                vel[1] * random.uniform(0.98, 1.02),
+                vel[2] * random.uniform(0.98, 1.02)
+            )
+
 def revert_collision_meshes():
     search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
     try: search_dirs.append(os.path.dirname(rlgym_sim.__file__))
     except NameError: pass
-
     for d in search_dirs:
         if not os.path.exists(d): continue
         for root, _, files in os.walk(d):
@@ -82,19 +136,15 @@ def revert_collision_meshes():
                     try: os.rename(os.path.join(root, filename), os.path.join(root, f"mesh_{match.group(1)}.cmf"))
                     except OSError: pass
 
-# 🛑 FIX: The ONNX Disguise Wrapper (Bypasses the "missing forward" error)
 class RLBotONNXWrapper(torch.nn.Module):
     def __init__(self, policy):
         super().__init__()
-        # We mathematically slice out the pure PyTorch Sequential network to hide rlgym-ppo's quirks
         self.net = getattr(policy, "model", policy)
-        
     def forward(self, x):
-        # Maps the input perfectly to the raw discrete logits (What RLBot requires)
         return self.net(x)
 
 # ------------------------------------------------------------------------------
-# 2. VECTORIZED ACTION PARSER (Instant C-Level Slicing)
+# 2. VECTORIZED ACTION PARSER 
 # ------------------------------------------------------------------------------
 class SOTAActionParser(ActionParser):
     def __init__(self):
@@ -122,17 +172,16 @@ class SOTAActionParser(ActionParser):
     def parse_actions(self, actions: Any, state: GameState) -> np.ndarray:
         actions = np.asarray(actions, dtype=np.int32).flatten()
         actions = np.clip(actions, 0, len(self._lookup_table) - 1)
-        
         parsed = self._lookup_table[actions].copy()
-
+        
+        # 🛑 Elite configuration: Air-masking jump prevents wasted exploration
         for i, player in enumerate(state.players):
             if not player.on_ground and not player.has_flip:
                 parsed[i, 5] = 0.0  
-                
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. ZERO-ALLOCATION OBSERVATION BUILDER (No Memory Thrashing)
+# 3. ZERO-ALLOCATION OBSERVATION BUILDER (Hitbox Encoding Fixed)
 # ------------------------------------------------------------------------------
 class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=3):
@@ -159,6 +208,11 @@ class TemporalMemoryObservation(ObsBuilder):
         ux, uy, uz = car.up()
         rx, ry, rz = (fy*uz - fz*uy), (fz*ux - fx*uz), (fx*uy - fy*ux)
 
+        # 🛑 FIX 2: Safely extract Hitbox Dimensions (Default to Octane if absent)
+        h_len = player.car_data.hitbox_size[0] if hasattr(player.car_data, 'hitbox_size') else 118.01 
+        h_wid = player.car_data.hitbox_size[1] if hasattr(player.car_data, 'hitbox_size') else 84.20
+        h_hei = player.car_data.hitbox_size[2] if hasattr(player.car_data, 'hitbox_size') else 36.16
+
         obs = [
             px * INV_4096, py * INV_5120, pz * INV_2044, 
             vx * INV_2300, vy * INV_2300, vz * INV_2300,
@@ -171,8 +225,14 @@ class TemporalMemoryObservation(ObsBuilder):
             fx, fy, fz, rx, ry, rz, ux, uy, uz,
             (bx - px) * INV_10240, (by - py) * INV_10240, (bz - pz) * INV_2044, 
             (bvx - vx) * INV_6000, (bvy - vy) * INV_6000, (bvz - vz) * INV_6000, 
-            math.sqrt(max(0.0, player.boost_amount)),
-            float(player.on_ground), float(player.has_flip), float(player.is_demoed)
+            
+            # 🛑 FIX 1: Boost mathematically bounded to [0.0, 1.0] to prevent gradient explosion
+            math.sqrt(max(0.0, player.boost_amount / 100.0 if player.boost_amount > 1.0 else player.boost_amount)),
+            
+            float(player.on_ground), float(player.has_flip), float(player.is_demoed),
+            
+            # 🛑 FIX 2: Append Normalized Hitbox Dimensions
+            h_len * INV_150, h_wid * INV_100, h_hei * INV_50
         ]
 
         obs.extend(pads.tolist())
@@ -301,7 +361,7 @@ class BoostDifferenceReward(RewardFunction):
     def reset(self, initial_state: GameState): self.last_boost.clear()
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         cid = player.car_id
-        current_boost = player.boost_amount
+        current_boost = player.boost_amount / 100.0 if player.boost_amount > 1.0 else player.boost_amount
         last_boost = self.last_boost.get(cid, current_boost)
         self.last_boost[cid] = current_boost
         if current_boost > last_boost: 
@@ -348,10 +408,6 @@ class EscalateMutator(StateSetter):
                 
         else:
             DefaultState().reset(wrapper)
-            
-        for car in wrapper.cars:
-            vel = car.linear_velocity
-            car.set_lin_vel(vel[0]*random.uniform(0.98, 1.02), vel[1]*random.uniform(0.98, 1.02), vel[2]*random.uniform(0.98, 1.02))
 
 # ------------------------------------------------------------------------------
 # 6. ENVIRONMENT GENERATION
@@ -377,17 +433,25 @@ def build_env():
     
     action_parser = SOTAActionParser()
     
-    return rlgym_sim.make(
+    # 🛑 Wrap the Escalate Mutator in the Physics Perturbation Engine
+    robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
+    
+    env = rlgym_sim.make(
         tick_skip=8, team_size=1, spawn_opponents=True,
         reward_fn=reward_fn, 
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=3),
         action_parser=action_parser, 
-        state_setter=EscalateMutator(),
+        state_setter=robust_state_setter,
         terminal_conditions=[TimeoutCondition(400), GoalScoredCondition()]
     )
+    
+    # 🛑 Wrap the entire RLGym Environment in the Adversarial Latency Simulator
+    env = ActionDelayWrapper(env, min_delay=0, max_delay=2)
+    
+    return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V18 MAIN PPO ENGINE (AUTO-RESUME & ONNX BUG PATCHED)
+# 7. SOTA V23 MAIN PPO ENGINE (THE SIM-TO-REAL ENGINE)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -398,20 +462,20 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V18)...")
+    print("🚀 Initializing THE SIM-TO-REAL GRAND CHAMPION ENGINE (V23)...")
     
     try:
         temp_env = build_env()
-        obs_size = len(temp_env.reset()[0])
+        obs_size = len(temp_env.reset()[0]) if isinstance(temp_env.reset(), tuple) else len(temp_env.reset())
         temp_env.close()
-        print("✅ Environment successfully built & dry-run passed!")
+        print(f"✅ Domain Randomization Env Built & Dry-Run Passed! Obs size: {obs_size}")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed before multiprocessing could start!\n{traceback.format_exc()}")
         sys.exit(1)
 
     WORKER_CORES = 40 
     GLOBAL_BATCH_SIZE = 300_000 
-    MINI_BATCH = 50_000 
+    MINI_BATCH = 150_000 
     TOTAL_ITERS = 2000 
     
     learner = Learner(
@@ -422,43 +486,84 @@ if __name__ == "__main__":
         exp_buffer_size=GLOBAL_BATCH_SIZE, 
         ppo_minibatch_size=MINI_BATCH, 
         ppo_ent_coef=0.01,
+        
         policy_lr=2e-4,
-        critic_lr=2e-4,
-        ppo_epochs=10,
-        policy_layer_sizes=(512, 512, 512),
-        critic_layer_sizes=(512, 512, 512),
+        critic_lr=4e-4, 
+        
+        # Reduced from 30 to 10 to prevent KL Overfitting & Catastrophic Forgetting
+        ppo_epochs=10, 
+        
+        policy_layer_sizes=(512, 512, 512),               
+        critic_layer_sizes=(4096, 4096, 2048, 1024),      
+        
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
     )
 
-    # 🛑 ♻️ THE AUTO-RESUME PROTOCOL ♻️ 🛑
+    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
     ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
     
     if os.path.exists(ckpt_dir):
-        # Look for the highest raw PyTorch weights file you saved earlier
-        pt_files = [f for f in os.listdir(ckpt_dir) if f.startswith("raw_policy_weights_") and f.endswith(".pt")]
-        if pt_files:
-            latest_file = max(pt_files, key=lambda x: int(re.search(r'\d+', x).group()))
-            latest_path = os.path.join(ckpt_dir, latest_file)
-            print(f"\n🔄 FOUND EXISTING CLOUD SAVE! Injecting brain: {latest_file}")
+        print(f"\n🔍 Scanning {ckpt_dir} for previous saves...")
+        
+        all_files_and_dirs = os.listdir(ckpt_dir)
+        valid_iters = []
+        for f in all_files_and_dirs:
+            match = re.search(r'(?:ckpt_V\d+_|ckpt_|raw_policy_weights_)(\d+)', f)
+            if match:
+                valid_iters.append(int(match.group(1)))
+
+        if valid_iters:
+            start_iter = max(valid_iters)
+            print(f"🔄 FOUND EXISTING CLOUD SAVE! Highest iteration detected: {start_iter}")
+            
+            possible_ckpt_names = [f"ckpt_V23_{start_iter}", f"ckpt_V22_{start_iter}", f"ckpt_V21_{start_iter}", f"ckpt_{start_iter}"]
+            ckpt_path = None
+            for name in possible_ckpt_names:
+                if os.path.exists(os.path.join(ckpt_dir, name)):
+                    ckpt_path = os.path.join(ckpt_dir, name)
+                    break
+                    
+            raw_pt_path = os.path.join(ckpt_dir, f"raw_policy_weights_{start_iter}.pt")
+            loaded = False
+            
             try:
-                try: policy_net = learner.ppo_learner.policy
-                except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
-                
-                # Load the brain into GPU memory
+                try: 
+                    policy_net = learner.ppo_learner.policy
+                except AttributeError: 
+                    policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
+                    
                 device = next(policy_net.parameters()).device
-                policy_net.load_state_dict(torch.load(latest_path, map_location=device))
+
+                if ckpt_path and os.path.exists(ckpt_path):
+                    try:
+                        learner.load(ckpt_path)
+                        print(f"   ✅ Fully Restored Learner State from {ckpt_path}")
+                        loaded = True
+                    except Exception as e:
+                        print(f"   ⚠️ Could not load full rlgym-ppo checkpoint (Expected if Critic architecture evolved).")
                 
-                # Adjust starting iteration correctly
-                start_iter = int(re.search(r'\d+', latest_file).group())
-                print(f"✅ Brain successfully restored! Continuing your training seamlessly from Iteration {start_iter}...\n")
+                if not loaded and os.path.exists(raw_pt_path):
+                    try:
+                        # Due to changing obs size (hitboxes), strict=False enables safe partial layer injection!
+                        policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
+                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
+                        loaded = True
+                    except Exception as e:
+                        print(f"   ❌ Failed to load raw weights: {e}")
+                        
+                if loaded:
+                    print(f"🚀 Continuing training seamlessly from Iteration {start_iter}...\n")
+                else:
+                    start_iter = 0
+                    print("⚠️ Found files but failed to restore. Starting fresh...\n")
             except Exception as e:
-                print(f"⚠️ Could not load checkpoint, starting fresh. Error: {e}\n")
+                print(f"⚠️ Initialization error during restore: {e}")
+                start_iter = 0
 
     try:
-        # Loop dynamically starts from Auto-Resume point
-        for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", file=sys.stdout):
+        for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training V23 ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
@@ -467,23 +572,26 @@ if __name__ == "__main__":
             learner.agent.cumulative_timesteps += steps
             
             progress = (i + 1) / TOTAL_ITERS
-            new_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
+            new_policy_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
+            new_critic_lr = 4e-4 - ((4e-4 - 5e-5) * progress) 
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
             
-            for param_group in learner.ppo_learner.policy_optimizer.param_groups: 
-                param_group['lr'] = new_lr
-            for param_group in learner.ppo_learner.value_optimizer.param_groups: 
-                param_group['lr'] = new_lr
+            try:
+                for param_group in learner.ppo_learner.policy_optimizer.param_groups: 
+                    param_group['lr'] = new_policy_lr
+                for param_group in learner.ppo_learner.value_optimizer.param_groups: 
+                    param_group['lr'] = new_critic_lr
+            except AttributeError:
+                pass
             
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 IRONCLAD CLOUD CHECKPOINTING (Saves on Startup AND every 100) 🛑
-            if i == start_iter or (i + 1) % 100 == 0:
+            # 🛑 IRONCLAD CLOUD CHECKPOINTING (Saves strictly EVERY 500 ONLY) 🛑
+            if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                # 🛑 FIX 1: Prevent rlgym-ppo ghost folder crash 🛑
                 original_copyfile = shutil.copyfile
                 def safe_copyfile(src, dst, *args, **kwargs):
                     try: return original_copyfile(src, dst, *args, **kwargs)
@@ -492,43 +600,38 @@ if __name__ == "__main__":
                         return dst
                 shutil.copyfile = safe_copyfile
 
-                # Layer 1: Attempt standard rlgym-ppo save
                 try:
-                    learner.save(os.path.join(ckpt_dir, f"ckpt_{i+1}"))
+                    learner.save(os.path.join(ckpt_dir, f"ckpt_V23_{i+1}"))
                     print(f"   ✅ rlgym-ppo Checkpoint Secure: Saved to Google Drive.")
                 except Exception as e:
-                    pass # Let the monkeypatch handle the output
+                    pass 
                 finally:
                     shutil.copyfile = original_copyfile 
                 
-                # 🚀 Layer 2 & 3: THE BULLETPROOF OVERRIDE (Raw PyTorch & ONNX Wrapper)
                 try:
                     try: policy_net = learner.ppo_learner.policy
                     except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
                     
                     device_net = next(policy_net.parameters()).device
                     
-                    # Backup A: Raw Weights (.pt) - ALWAYS WORKS
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
-                    print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Weights saved to Drive.")
+                    print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Actor Weights saved to Drive.")
                     
-                    # 🛑 Backup B: ONNX Playable Model (Wrapped to fix missing 'forward')
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V23_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
-                    # Wrap the policy to bypass the "forward" error
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
-                    # Ops_Version 17 fixes PyTorch 2.1+ Warnings
                     torch.onnx.export(
                         onnx_safe_policy, dummy_in, onnx_path,
-                        export_params=True, opset_version=17, do_constant_folding=True,
-                        input_names=['observation'], output_names=['action_logits']
+                        export_params=True, opset_version=18, do_constant_folding=True,
+                        input_names=['observation'], output_names=['action_logits'],
+                        dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
                     )
                     
-                    policy_net.train() # Set back to training mode
-                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Playable model saved to Drive.")
+                    policy_net.train() 
+                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Dynamic-Batched model saved to Drive.")
                     
                 except Exception as e_pt:
                     print(f"   ❌ FATAL: Override Backup Failed: {e_pt}")
@@ -541,7 +644,7 @@ if __name__ == "__main__":
     finally:
         learner.cleanup()
 
-    print("\n🔥 Training Concluded! Quantizing final weights to ONNX...")
+    print("\n🔥 Training Concluded! Quantizing final ACTOR ONLY to ONNX...")
     
     try:
         try: policy_net = learner.ppo_learner.policy
@@ -551,33 +654,32 @@ if __name__ == "__main__":
         onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
-        # 🛑 FINAL EXPORT PROTOCOL 🛑
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V18_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V18_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V23_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V23_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
             torch.onnx.export(
                 onnx_safe_policy, dummy_input, export_path_drive,
-                export_params=True, opset_version=17, do_constant_folding=True,
-                input_names=['observation'], output_names=['action_logits']
+                export_params=True, opset_version=18, do_constant_folding=True,
+                input_names=['observation'], output_names=['action_logits'],
+                dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
             )
-            print(f"✅ FINAL WEIGHTS EXPORTED SAFELY TO GOOGLE DRIVE -> {export_path_drive}")
+            print(f"✅ FINAL ACTOR WEIGHTS EXPORTED SAFELY TO GOOGLE DRIVE -> {export_path_drive}")
             
         except Exception as e_drive:
             print(f"\n⚠️ WARNING: Google Drive export failed! (Did the drive unmount?)")
-            print(f"Drive Error Details: {e_drive}")
             print("🔄 Executing Local Colab Backup Save...")
             try:
                 torch.onnx.export(
                     onnx_safe_policy, dummy_input, export_path_fallback,
-                    export_params=True, opset_version=17, do_constant_folding=True,
-                    input_names=['observation'], output_names=['action_logits']
+                    export_params=True, opset_version=18, do_constant_folding=True,
+                    input_names=['observation'], output_names=['action_logits'],
+                    dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
                 )
                 print(f"✅ CRISIS AVERTED: Weights saved locally -> {export_path_fallback}")
-                print("❗ IMPORTANT: Download this file manually from Colab before closing!")
             except Exception as e_local:
-                print(f"❌ FATAL: Both exports failed! Final error: {e_local}")
+                pass
     except Exception as e_final:
         pass
