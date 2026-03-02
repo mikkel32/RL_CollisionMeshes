@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V14)
-# 40-Core / Google Drive Cloud Save / Bulletproof Deployment
+# SOTA ROCKET LEAGUE AI - 150k SPS ABSOLUTE ENGINE (SOTA V15)
+# 40-Core / Triple-Redundant Cloud Saving / Library Bug Patched
 # ==============================================================================
 import os
 import re
@@ -9,6 +9,7 @@ import math
 import random
 import warnings
 import traceback
+import json
 from collections import deque
 from typing import Any
 
@@ -41,7 +42,6 @@ torch.set_num_threads(1)
 
 # ------------------------------------------------------------------------------
 # 0. ALGEBRAIC INVERSE CONSTANTS (CPU Math Optimization)
-# Division is slow. Multiplication is extremely fast.
 # ------------------------------------------------------------------------------
 INV_2044 = 1.0 / 2044.0
 INV_2300 = 1.0 / 2300.0
@@ -56,7 +56,7 @@ INV_1_75 = 1.0 / 1.75
 INV_3000 = 1.0 / 3000.0
 
 # ------------------------------------------------------------------------------
-# 1. FILE SYSTEM SANITIZATION & CLOUD SAVE SETUP
+# 1. FILE SYSTEM SANITIZATION
 # ------------------------------------------------------------------------------
 def revert_collision_meshes():
     search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
@@ -78,7 +78,6 @@ def revert_collision_meshes():
 class SOTAActionParser(ActionParser):
     def __init__(self):
         super().__init__()
-        # 🚀 Pre-allocate as a Numpy array ONCE for instant C-level lookup
         self._lookup_table = np.array(self._make_bins(), dtype=np.float32)
 
     def _make_bins(self):
@@ -100,16 +99,14 @@ class SOTAActionParser(ActionParser):
         return gym.spaces.Discrete(len(self._lookup_table))
 
     def parse_actions(self, actions: Any, state: GameState) -> np.ndarray:
-        # 🚀 100x FASTER: Vectorized Numpy Slicing! No for-loops, no try-excepts.
         actions = np.asarray(actions, dtype=np.int32).flatten()
         actions = np.clip(actions, 0, len(self._lookup_table) - 1)
         
         parsed = self._lookup_table[actions].copy()
 
-        # Physics override
         for i, player in enumerate(state.players):
             if not player.on_ground and not player.has_flip:
-                parsed[i, 5] = 0.0  # Disable jump mid-air without flip
+                parsed[i, 5] = 0.0  
                 
         return parsed
 
@@ -141,7 +138,6 @@ class TemporalMemoryObservation(ObsBuilder):
         ux, uy, uz = car.up()
         rx, ry, rz = (fy*uz - fz*uy), (fz*ux - fx*uz), (fx*uy - fy*ux)
 
-        # 🚀 HYPER-FAST PYTHON LIST (No OS Memory Thrashing)
         obs = [
             px * INV_4096, py * INV_5120, pz * INV_2044, 
             vx * INV_2300, vy * INV_2300, vz * INV_2300,
@@ -158,10 +154,8 @@ class TemporalMemoryObservation(ObsBuilder):
             float(player.on_ground), float(player.has_flip), float(player.is_demoed)
         ]
 
-        # 🚀 Fast list extend
         obs.extend(pads.tolist())
 
-        # Opponent injection
         found_opp = False
         for other in state.players:
             if other.car_id != player.car_id:
@@ -178,28 +172,25 @@ class TemporalMemoryObservation(ObsBuilder):
         if not found_opp:
             obs.extend([0.0] * 6)
 
-        # 🛑 FIX: Safely extract Action (Bypasses rlgym_sim's dry-run dummy arrays instantly)
         try:
             prev_act = np.asarray(previous_action)
             if prev_act.size == 8:
                 obs.extend(prev_act.flatten().tolist())
             elif prev_act.size == 1:
                 idx = int(prev_act.item())
-                idx = max(0, min(idx, len(self.action_parser._lookup_table) - 1)) # Failsafe clamp
+                idx = max(0, min(idx, len(self.action_parser._lookup_table) - 1)) 
                 obs.extend(self.action_parser._lookup_table[idx].tolist())
             else:
                 obs.extend([0.0] * 8)
         except Exception:
             obs.extend([0.0] * 8)
 
-        # Temporal Memory stacking
         cid = player.car_id
         if cid not in self.memory_banks:
             self.memory_banks[cid] = deque([obs] * self.history_size, maxlen=self.history_size)
         else:
             self.memory_banks[cid].append(obs)
             
-        # 🚀 Flatten the deque into a single 1D array ONLY ONCE at the very end
         flat_obs = [val for frame in self.memory_banks[cid] for val in frame]
         
         obs_arr = np.array(flat_obs, dtype=np.float32)
@@ -209,7 +200,7 @@ class TemporalMemoryObservation(ObsBuilder):
         return obs_arr
 
 # ------------------------------------------------------------------------------
-# 4. ALGEBRAICALLY SIMPLIFIED REWARD SHAPING (Minimum CPU division)
+# 4. ALGEBRAICALLY SIMPLIFIED REWARD SHAPING
 # ------------------------------------------------------------------------------
 class CompoundAerialReward(RewardFunction):
     def __init__(self): self.air_time = {}
@@ -375,7 +366,7 @@ def build_env():
     )
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V14 MAIN PPO ENGINE (DRIVE SAVING & FAILSAFES)
+# 7. SOTA V15 MAIN PPO ENGINE (TRIPLE-REDUNDANT SAVING)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -386,7 +377,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V14)...")
+    print("🚀 Initializing THE 150k SPS ABSOLUTE ENGINE (V15)...")
     
     try:
         temp_env = build_env()
@@ -400,8 +391,6 @@ if __name__ == "__main__":
     WORKER_CORES = 40 
     GLOBAL_BATCH_SIZE = 300_000 
     MINI_BATCH = 50_000 
-    
-    # 🛑 USER REQUEST: Reduced to precisely 2,000 iterations 
     TOTAL_ITERS = 2000 
     
     learner = Learner(
@@ -409,10 +398,7 @@ if __name__ == "__main__":
         n_proc=WORKER_CORES, 
         ppo_batch_size=GLOBAL_BATCH_SIZE,
         ts_per_iteration=GLOBAL_BATCH_SIZE,
-        
-        # 🛑 FIX: Exactly 1:1 mapped to batch size to prevent On-Policy data poison
         exp_buffer_size=GLOBAL_BATCH_SIZE, 
-        
         ppo_minibatch_size=MINI_BATCH, 
         ppo_ent_coef=0.01,
         policy_lr=2e-4,
@@ -433,7 +419,6 @@ if __name__ == "__main__":
             learner.ppo_learner.learn(learner.experience_buffer)
             learner.agent.cumulative_timesteps += steps
             
-            # Decay math automatically adapts to the 2,000 threshold
             progress = (i + 1) / TOTAL_ITERS
             new_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
@@ -446,15 +431,57 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 CLOUD CHECKPOINTING: Saves progress every 500 iterations
-            if (i + 1) % 500 == 0:
+            # 🛑 TRIPLE-REDUNDANT CHECKPOINTING (Every 100 Iterations) 🛑
+            if (i + 1) % 100 == 0:
+                print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
+                ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
+                os.makedirs(ckpt_dir, exist_ok=True)
+                
+                # 🛑 FIX: The `rlgym_ppo` Library Bug Patch
+                # Force-rebuild the temporary files the library crashes without.
+                if hasattr(learner, 'run_dir'):
+                    os.makedirs(learner.run_dir, exist_ok=True)
+                    config_path = os.path.join(learner.run_dir, "config.json")
+                    if not os.path.exists(config_path):
+                        with open(config_path, "w") as f:
+                            json.dump({}, f)
+
+                # Layer 1: Attempt standard rlgym-ppo save
                 try:
-                    ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
-                    os.makedirs(ckpt_dir, exist_ok=True)
                     learner.save(os.path.join(ckpt_dir, f"ckpt_{i+1}"))
-                    print(f"\n💾 Cloud Backup Secure: Iteration {i+1} saved to Google Drive.")
+                    print(f"   ✅ rlgym-ppo Checkpoint Secure: Saved to Google Drive.")
                 except Exception as e:
-                    print(f"\n⚠️ Warning: Failed to save checkpoint to Drive: {e}")
+                    print(f"   ⚠️ Warning: rlgym-ppo wrapper save failed: {e}")
+                
+                # 🚀 Layer 2: THE BULLETPROOF OVERRIDE (Raw PyTorch & ONNX)
+                try:
+                    try:
+                        policy_net = learner.ppo_learner.policy
+                    except AttributeError:
+                        policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
+                    
+                    device_net = next(policy_net.parameters()).device
+                    
+                    # Backup A: PyTorch weights (.pt) - ALWAYS WORKS
+                    fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
+                    torch.save(policy_net.state_dict(), fallback_path)
+                    print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Weights saved to Drive.")
+                    
+                    # Backup B: ONNX Playable Model - READY TO TEST
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_Iter_{i+1}.onnx")
+                    dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
+                    
+                    policy_net.eval()
+                    torch.onnx.export(
+                        policy_net, dummy_in, onnx_path,
+                        export_params=True, opset_version=14, do_constant_folding=True,
+                        input_names=['observation'], output_names=['action_logits']
+                    )
+                    policy_net.train() # Reset back to training mode
+                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Playable model saved to Drive.")
+                    
+                except Exception as e_pt:
+                    print(f"   ❌ FATAL: Bulletproof Fallback Save Failed: {e_pt}")
 
     except KeyboardInterrupt:
         print("\n🛑 Training interrupted safely.")
@@ -463,7 +490,7 @@ if __name__ == "__main__":
     finally:
         learner.cleanup()
 
-    print("\n🔥 Training Concluded! Quantizing weights to ONNX...")
+    print("\n🔥 Training Concluded! Quantizing final weights to ONNX...")
     
     try:
         if hasattr(learner, 'ppo_learner'): policy = learner.ppo_learner.policy
@@ -474,13 +501,12 @@ if __name__ == "__main__":
     policy.eval().to("cpu")
     dummy_input = torch.randn(1, obs_size, dtype=torch.float32)
     
-    # 🛑 THE UNKILLABLE EXPORT PROTOCOL 🛑
+    # 🛑 FINAL EXPORT PROTOCOL 🛑
     save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-    export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V14.onnx")
-    export_path_fallback = "SOTA_RLBot_V14_FALLBACK.onnx"
+    export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V15_Final.onnx")
+    export_path_fallback = "SOTA_RLBot_V15_FALLBACK.onnx"
     
     try:
-        # Create directory automatically if it doesn't exist
         os.makedirs(save_dir, exist_ok=True)
         torch.onnx.export(
             policy, dummy_input, export_path_drive,
@@ -493,7 +519,6 @@ if __name__ == "__main__":
         print(f"\n⚠️ WARNING: Google Drive export failed! (Did the drive unmount?)")
         print(f"Drive Error Details: {e_drive}")
         print("🔄 Executing Local Colab Backup Save...")
-        
         try:
             torch.onnx.export(
                 policy, dummy_input, export_path_fallback,
