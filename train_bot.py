@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V24)
-# 40-Core EPYC / Fast C-Level Latency Wrapper / Gym Spam Silenced
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V23)
+# 40-Core EPYC / Asymmetric Megabrain / Domain Randomization Active
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -20,13 +20,13 @@ import warnings
 import traceback
 import json
 import shutil
+import copy
 from collections import deque
 from typing import Any
 
-# 🛑 FIX: Silence standard deprecation and future warnings from Python
+# Silence standard deprecation and future warnings from the console
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 warnings.filterwarnings("ignore", category=FutureWarning) 
-warnings.filterwarnings("ignore", module="gym")
 
 # 🛑 CRITICAL FIX 1: KILL "THREAD BOMB" (CPU Contention Fix) 🛑
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -38,10 +38,6 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import numpy as np
 import torch
 import gym
-
-# 🛑 SPEED PATCH: Permanently silence Gym's internal deprecation spam
-gym.logger.set_level(40) 
-
 from tqdm import tqdm
 
 import rlgym_sim
@@ -72,18 +68,19 @@ INV_120  = 8.0 / 120.0
 INV_1_75 = 1.0 / 1.75
 INV_3000 = 1.0 / 3000.0
 
-# Hitbox normalization constants
-INV_150 = 1.0 / 150.0  
-INV_100 = 1.0 / 100.0  
-INV_50  = 1.0 / 50.0   
+# 🛑 Hitbox normalization constants (V23 Fix)
+INV_150 = 1.0 / 150.0  # Max Hitbox Length bound
+INV_100 = 1.0 / 100.0  # Max Hitbox Width bound
+INV_50  = 1.0 / 50.0   # Max Hitbox Height bound
 
 # ------------------------------------------------------------------------------
 # 1. DOMAIN RANDOMIZATION WRAPPERS (Sim-to-Real Protection)
 # ------------------------------------------------------------------------------
 class ActionDelayWrapper(gym.Wrapper):
     """
-    Adversarial Domain Randomization (Sim-to-Real Latency)
+    🛑 FIX 3A: Adversarial Domain Randomization (Sim-to-Real Latency)
     Intercepts the calculated action and forces a randomized frame delay.
+    Forces the AI to learn predictive momentum rather than reactive memorization.
     """
     def __init__(self, env, min_delay=0, max_delay=2):
         super().__init__(env)
@@ -96,15 +93,8 @@ class ActionDelayWrapper(gym.Wrapper):
         return self.env.reset(**kwargs)
 
     def step(self, action):
-        # 🚀 SPEED FIX: Extremely fast C-level numpy copy instead of slow Python deepcopy!
-        if isinstance(action, np.ndarray):
-            safe_action = action.copy()
-        elif hasattr(action, 'copy'):
-            safe_action = action.copy()
-        else:
-            safe_action = np.array(action, copy=True)
-            
-        self.action_buffer.append(safe_action) 
+        # Deepcopy prevents memory mutation bugs in the multiprocess pipe
+        self.action_buffer.append(copy.deepcopy(action)) 
         delay_ticks = random.randint(self.min_delay, self.max_delay)
         
         if len(self.action_buffer) > delay_ticks:
@@ -116,7 +106,8 @@ class ActionDelayWrapper(gym.Wrapper):
 
 class PhysicsRandomizationMutator(StateSetter):
     """
-    Physics Perturbation: Continuously applies minute noise algorithms to physical velocities.
+    🛑 FIX 3B: Physics Perturbation
+    Continuously applies minute, randomized noise algorithms to the physical velocities.
     """
     def __init__(self, base_mutator):
         super().__init__()
@@ -183,14 +174,14 @@ class SOTAActionParser(ActionParser):
         actions = np.clip(actions, 0, len(self._lookup_table) - 1)
         parsed = self._lookup_table[actions].copy()
         
-        # Air-masking jump prevents wasted exploration
+        # 🛑 Elite configuration: Air-masking jump prevents wasted exploration
         for i, player in enumerate(state.players):
             if not player.on_ground and not player.has_flip:
                 parsed[i, 5] = 0.0  
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. ZERO-ALLOCATION OBSERVATION BUILDER
+# 3. ZERO-ALLOCATION OBSERVATION BUILDER (Hitbox Encoding Fixed)
 # ------------------------------------------------------------------------------
 class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=3):
@@ -217,6 +208,7 @@ class TemporalMemoryObservation(ObsBuilder):
         ux, uy, uz = car.up()
         rx, ry, rz = (fy*uz - fz*uy), (fz*ux - fx*uz), (fx*uy - fy*ux)
 
+        # 🛑 FIX 2: Safely extract Hitbox Dimensions (Default to Octane if absent)
         h_len = player.car_data.hitbox_size[0] if hasattr(player.car_data, 'hitbox_size') else 118.01 
         h_wid = player.car_data.hitbox_size[1] if hasattr(player.car_data, 'hitbox_size') else 84.20
         h_hei = player.car_data.hitbox_size[2] if hasattr(player.car_data, 'hitbox_size') else 36.16
@@ -234,9 +226,12 @@ class TemporalMemoryObservation(ObsBuilder):
             (bx - px) * INV_10240, (by - py) * INV_10240, (bz - pz) * INV_2044, 
             (bvx - vx) * INV_6000, (bvy - vy) * INV_6000, (bvz - vz) * INV_6000, 
             
+            # 🛑 FIX 1: Boost mathematically bounded to [0.0, 1.0] to prevent gradient explosion
             math.sqrt(max(0.0, player.boost_amount / 100.0 if player.boost_amount > 1.0 else player.boost_amount)),
+            
             float(player.on_ground), float(player.has_flip), float(player.is_demoed),
             
+            # 🛑 FIX 2: Append Normalized Hitbox Dimensions
             h_len * INV_150, h_wid * INV_100, h_hei * INV_50
         ]
 
@@ -437,6 +432,8 @@ def build_env():
     )
     
     action_parser = SOTAActionParser()
+    
+    # 🛑 Wrap the Escalate Mutator in the Physics Perturbation Engine
     robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
     
     env = rlgym_sim.make(
@@ -448,11 +445,13 @@ def build_env():
         terminal_conditions=[TimeoutCondition(400), GoalScoredCondition()]
     )
     
+    # 🛑 Wrap the entire RLGym Environment in the Adversarial Latency Simulator
     env = ActionDelayWrapper(env, min_delay=0, max_delay=2)
+    
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V24 MAIN PPO ENGINE (THE SPEED RESTORED ENGINE)
+# 7. SOTA V23 MAIN PPO ENGINE (THE SIM-TO-REAL ENGINE)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -463,15 +462,11 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL GRAND CHAMPION ENGINE (V24)...")
+    print("🚀 Initializing THE SIM-TO-REAL GRAND CHAMPION ENGINE (V23)...")
     
     try:
         temp_env = build_env()
-        # 🛑 FIX: Properly calculate obs size regardless of Gym wrapper return formats
-        obs = temp_env.reset()
-        if isinstance(obs, tuple):
-            obs = obs[0]
-        obs_size = len(obs[0]) if isinstance(obs, list) else len(obs)
+        obs_size = len(temp_env.reset()[0]) if isinstance(temp_env.reset(), tuple) else len(temp_env.reset())
         temp_env.close()
         print(f"✅ Domain Randomization Env Built & Dry-Run Passed! Obs size: {obs_size}")
     except Exception as e:
@@ -494,6 +489,8 @@ if __name__ == "__main__":
         
         policy_lr=2e-4,
         critic_lr=4e-4, 
+        
+        # Reduced from 30 to 10 to prevent KL Overfitting & Catastrophic Forgetting
         ppo_epochs=10, 
         
         policy_layer_sizes=(512, 512, 512),               
@@ -503,11 +500,13 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
+    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
     ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
     
     if os.path.exists(ckpt_dir):
         print(f"\n🔍 Scanning {ckpt_dir} for previous saves...")
+        
         all_files_and_dirs = os.listdir(ckpt_dir)
         valid_iters = []
         for f in all_files_and_dirs:
@@ -519,7 +518,7 @@ if __name__ == "__main__":
             start_iter = max(valid_iters)
             print(f"🔄 FOUND EXISTING CLOUD SAVE! Highest iteration detected: {start_iter}")
             
-            possible_ckpt_names = [f"ckpt_V24_{start_iter}", f"ckpt_V23_{start_iter}", f"ckpt_V22_{start_iter}", f"ckpt_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V23_{start_iter}", f"ckpt_V22_{start_iter}", f"ckpt_V21_{start_iter}", f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -543,10 +542,11 @@ if __name__ == "__main__":
                         print(f"   ✅ Fully Restored Learner State from {ckpt_path}")
                         loaded = True
                     except Exception as e:
-                        pass
+                        print(f"   ⚠️ Could not load full rlgym-ppo checkpoint (Expected if Critic architecture evolved).")
                 
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
+                        # Due to changing obs size (hitboxes), strict=False enables safe partial layer injection!
                         policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
                         print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
                         loaded = True
@@ -563,7 +563,7 @@ if __name__ == "__main__":
                 start_iter = 0
 
     try:
-        for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training V24 ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
+        for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training V23 ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
@@ -587,7 +587,7 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 CLOUD CHECKPOINTING (Saves strictly EVERY 500)
+            # 🛑 IRONCLAD CLOUD CHECKPOINTING (Saves strictly EVERY 500 ONLY) 🛑
             if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
@@ -601,7 +601,7 @@ if __name__ == "__main__":
                 shutil.copyfile = safe_copyfile
 
                 try:
-                    learner.save(os.path.join(ckpt_dir, f"ckpt_V24_{i+1}"))
+                    learner.save(os.path.join(ckpt_dir, f"ckpt_V23_{i+1}"))
                     print(f"   ✅ rlgym-ppo Checkpoint Secure: Saved to Google Drive.")
                 except Exception as e:
                     pass 
@@ -618,7 +618,7 @@ if __name__ == "__main__":
                     torch.save(policy_net.state_dict(), fallback_path)
                     print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Actor Weights saved to Drive.")
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V24_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V23_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -635,6 +635,7 @@ if __name__ == "__main__":
                     
                 except Exception as e_pt:
                     print(f"   ❌ FATAL: Override Backup Failed: {e_pt}")
+                    print(traceback.format_exc())
 
     except KeyboardInterrupt:
         print("\n🛑 Training interrupted safely.")
@@ -654,8 +655,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V24_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V24_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V23_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V23_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
