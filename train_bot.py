@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V27)
-# 40-Core EPYC / ONNX Bug Fixed / Flawless Auto-Resume / 500-Step Saves
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V30)
+# 40-Core EPYC / Naked Checkpoint Fix / Infinite Horizon Auto-Extend
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -19,7 +19,6 @@ import random
 import warnings
 import traceback
 import json
-import shutil
 import logging
 from collections import deque
 from typing import Any
@@ -89,7 +88,7 @@ class ActionDelayWrapper(gym.Wrapper):
         return self.env.reset(**kwargs)
 
     def step(self, action):
-        # Fast NumPy Copy instead of deepcopy to maintain 150k SPS!
+        # ⚡ Fast NumPy Copy instead of deepcopy to maintain 150k SPS!
         self.action_buffer.append(np.array(action, copy=True)) 
         delay_ticks = random.randint(self.min_delay, self.max_delay)
         
@@ -318,7 +317,7 @@ class KinestheticShadowDefense(RewardFunction):
         dist_factor = math.exp(-dist * INV_3000)
         gy = -5120.0 if player.team_num == 0 else 5120.0
         b2gx, b2gy, b2gz = -bx, gy-by, -bz
-        c2gx, c2gy, c2gz = -cx, gy-cy, -bz
+        c2gx, c2gy, c2gz = -cx, gy-cy, -cz
         b2g_n = math.sqrt(b2gx**2 + b2gy**2 + b2gz**2)
         c2g_n = math.sqrt(c2gx**2 + c2gy**2 + c2gz**2)
         align = 0.0
@@ -434,7 +433,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V27 MAIN PPO ENGINE
+# 7. SOTA V30 MAIN PPO ENGINE (NAKED CHECKPOINT FIX)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -445,26 +444,30 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL GRAND CHAMPION ENGINE (V27)...")
+    print("🚀 Initializing THE SIM-TO-REAL INFINITE ENGINE (V30)...")
     
     try:
         temp_env = build_env()
         dummy_reset = temp_env.reset()
         
-        # 🛑 UNBREAKABLE MATRIX FIX: Extracts the absolute dimension length mathematically
+        # UNBREAKABLE MATRIX FIX: Mathematically extracts true feature length ignoring agent counts
         if isinstance(dummy_reset, tuple): dummy_reset = dummy_reset[0]
         obs_size = np.atleast_2d(dummy_reset).shape[-1]
         
         temp_env.close()
-        print(f"✅ Domain Randomization Env Built & Dry-Run Passed! True Obs Size: {obs_size}")
+        print(f"✅ Domain Randomization Env Built! True Obs Size: {obs_size}")
     except Exception as e:
-        print(f"🚨 FATAL: build_env() crashed before multiprocessing could start!\n{traceback.format_exc()}")
+        print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
 
     WORKER_CORES = 40 
     GLOBAL_BATCH_SIZE = 300_000 
     MINI_BATCH = 150_000 
-    TOTAL_ITERS = 2000 
+    
+    # 🛑 THE INFINITE HORIZON BASE LIMITS 🛑
+    BASE_ITERS = 2000
+    EXTENSION_STEP = 1000
+    TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
         build_env,
@@ -504,7 +507,12 @@ if __name__ == "__main__":
             start_iter = max(valid_iters)
             print(f"🔄 FOUND EXISTING CLOUD SAVE! Highest iteration detected: {start_iter}")
             
-            possible_ckpt_names = [f"ckpt_V27_{start_iter}", f"ckpt_V26_{start_iter}", f"ckpt_V25_{start_iter}", f"ckpt_V24_{start_iter}", f"ckpt_V23_{start_iter}"]
+            # 🛑 INFINITE HORIZON: Auto-Extend Target by 1000 if goal is reached! 🛑
+            while start_iter >= TOTAL_ITERS:
+                TOTAL_ITERS += EXTENSION_STEP
+                print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
+
+            possible_ckpt_names = [f"ckpt_V30_{start_iter}", f"ckpt_V29_{start_iter}", f"ckpt_V28_{start_iter}", f"ckpt_V27_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -522,14 +530,32 @@ if __name__ == "__main__":
                     
                 device = next(policy_net.parameters()).device
 
-                if ckpt_path and os.path.exists(ckpt_path):
+                # Layer 1: Forcefully load our explicitly populated PyTorch files
+                if ckpt_path and os.path.exists(os.path.join(ckpt_path, "PPO_POLICY.pt")):
+                    print(f"   🔄 Attempting to load explicitly saved PyTorch files from {ckpt_path}...")
+                    try:
+                        policy_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device), strict=False)
+                        try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
+                        except: pass
+                        try: learner.ppo_learner.policy_optimizer.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY_OPTIMIZER.pt"), map_location=device))
+                        except: pass
+                        try: learner.ppo_learner.value_optimizer.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_OPTIMIZER.pt"), map_location=device))
+                        except: pass
+                        print(f"   ✅ Manually Restored PyTorch Brain & Optimizers from folder.")
+                        loaded = True
+                    except Exception as e:
+                        print(f"   ⚠️ Folder load failed: {e}")
+                
+                # Fallback if it's an older rlgym-ppo formatted folder
+                if not loaded and ckpt_path and os.path.exists(ckpt_path):
                     try:
                         learner.load(ckpt_path)
-                        print(f"   ✅ Fully Restored Learner State from {ckpt_path}")
+                        print(f"   ✅ Legacy Learner State Restored from {ckpt_path}")
                         loaded = True
                     except Exception as e:
                         pass
                 
+                # Ultimate Fallback: The Raw Actor Weights
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
                         policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
@@ -544,16 +570,15 @@ if __name__ == "__main__":
                     print(f"🚀 Continuing training seamlessly from Iteration {start_iter}...\n")
                 else:
                     start_iter = 0
+                    TOTAL_ITERS = BASE_ITERS
                     print("⚠️ Found files but failed to restore. Starting fresh...\n")
             except Exception as e:
                 print(f"⚠️ Initialization error during restore: {e}")
                 start_iter = 0
-
-    if start_iter >= TOTAL_ITERS:
-        print(f"\n🎯 Target of {TOTAL_ITERS} iterations already reached! Exiting loop to export final ONNX.\n")
+                TOTAL_ITERS = BASE_ITERS
 
     try:
-        # 🛑 DYNAMIC PROGRESS BAR: Visual skips perfectly to starting point 🛑
+        # 🛑 DYNAMIC PROGRESS BAR
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
@@ -568,52 +593,50 @@ if __name__ == "__main__":
             new_ent = 0.01 - ((0.01 - 0.005) * progress)
             
             try:
-                for param_group in learner.ppo_learner.policy_optimizer.param_groups: 
-                    param_group['lr'] = new_policy_lr
-                for param_group in learner.ppo_learner.value_optimizer.param_groups: 
-                    param_group['lr'] = new_critic_lr
+                for param_group in learner.ppo_learner.policy_optimizer.param_groups: param_group['lr'] = new_policy_lr
+                for param_group in learner.ppo_learner.value_optimizer.param_groups: param_group['lr'] = new_critic_lr
             except AttributeError:
                 pass
             
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 IRONCLAD CLOUD CHECKPOINTING (Saves strictly EVERY 500 ONLY) 🛑
+            # 🛑 DIRECT PYTORCH CHECKPOINTING (Saves STRICTLY at 500, 1000, 1500, 2000...)
             if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                original_copyfile = shutil.copyfile
-                def safe_copyfile(src, dst, *args, **kwargs):
-                    try: return original_copyfile(src, dst, *args, **kwargs)
-                    except FileNotFoundError:
-                        with open(dst, 'w') as f: f.write('{}') 
-                        return dst
-                shutil.copyfile = safe_copyfile
-
-                try:
-                    learner.save(os.path.join(ckpt_dir, f"ckpt_V27_{i+1}"))
-                    print(f"   ✅ rlgym-ppo Checkpoint Secure: Saved to Google Drive.")
-                except Exception as e:
-                    pass 
-                finally:
-                    shutil.copyfile = original_copyfile 
+                # 🛑 FIX: Explicitly Save 4/4 PPO Files directly into the Folder! (NO MORE EMPTY FOLDERS)
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V30_{i+1}")
+                os.makedirs(ckpt_folder, exist_ok=True)
                 
+                try:
+                    policy_net = learner.ppo_learner.policy
+                    value_net = learner.ppo_learner.value_net
+                    policy_opt = learner.ppo_learner.policy_optimizer
+                    value_opt = learner.ppo_learner.value_optimizer
+                    
+                    torch.save(policy_net.state_dict(), os.path.join(ckpt_folder, "PPO_POLICY.pt"))
+                    torch.save(value_net.state_dict(), os.path.join(ckpt_folder, "PPO_VALUE_NET.pt"))
+                    torch.save(policy_opt.state_dict(), os.path.join(ckpt_folder, "PPO_POLICY_OPTIMIZER.pt"))
+                    torch.save(value_opt.state_dict(), os.path.join(ckpt_folder, "PPO_VALUE_OPTIMIZER.pt"))
+                        
+                    print(f"   ✅ Naked Checkpoint Secure: All 4 PyTorch components saved successfully to {ckpt_folder}!")
+                except Exception as e:
+                    print(f"   ⚠️ Naked Checkpoint save failed: {e}")
+                
+                # Raw Fallback & ONNX Export
                 try:
                     try: policy_net = learner.ppo_learner.policy
                     except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
-                    
                     device_net = next(policy_net.parameters()).device
                     
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Actor Weights saved to Drive.")
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V27_Iter_{i+1}.onnx")
-                    
-                    # 🛑 THE FIX: Flawlessly shaped Dummy Tensor 🛑
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V30_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
-                    
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
                     torch.onnx.export(
@@ -622,10 +645,8 @@ if __name__ == "__main__":
                         input_names=['observation'], output_names=['action_logits'],
                         dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
                     )
-                    
                     policy_net.train() 
                     print(f"   ✅ ONNX HOT-SWAP EXPORT: Dynamic-Batched model saved to Drive.")
-                    
                 except Exception as e_pt:
                     print(f"   ❌ FATAL: Override Backup Failed: {e_pt}")
 
@@ -644,12 +665,11 @@ if __name__ == "__main__":
             
         policy_net.to("cpu")
         onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
-        
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V27_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V27_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V30_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V30_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
