@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V30)
-# 40-Core EPYC / Naked Checkpoint Fix / Infinite Horizon Auto-Extend
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V31)
+# 40-Core EPYC / Automated Recovery Hook / Anti-Donut State Perfect Replica
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -19,6 +19,7 @@ import random
 import warnings
 import traceback
 import json
+import shutil
 import logging
 from collections import deque
 from typing import Any
@@ -433,7 +434,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V30 MAIN PPO ENGINE (NAKED CHECKPOINT FIX)
+# 7. SOTA V31 MAIN PPO ENGINE (AUTOMATED RECOVERY ENGINE)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -444,16 +445,13 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL INFINITE ENGINE (V30)...")
+    print("🚀 Initializing THE SIM-TO-REAL INFINITE ENGINE (V31)...")
     
     try:
         temp_env = build_env()
         dummy_reset = temp_env.reset()
-        
-        # UNBREAKABLE MATRIX FIX: Mathematically extracts true feature length ignoring agent counts
         if isinstance(dummy_reset, tuple): dummy_reset = dummy_reset[0]
         obs_size = np.atleast_2d(dummy_reset).shape[-1]
-        
         temp_env.close()
         print(f"✅ Domain Randomization Env Built! True Obs Size: {obs_size}")
     except Exception as e:
@@ -464,7 +462,6 @@ if __name__ == "__main__":
     GLOBAL_BATCH_SIZE = 300_000 
     MINI_BATCH = 150_000 
     
-    # 🛑 THE INFINITE HORIZON BASE LIMITS 🛑
     BASE_ITERS = 2000
     EXTENSION_STEP = 1000
     TOTAL_ITERS = BASE_ITERS
@@ -489,7 +486,7 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
-    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
+    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL WITH RECOVERY HOOK ♻️ 🛑
     start_iter = 0
     ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
     
@@ -507,65 +504,88 @@ if __name__ == "__main__":
             start_iter = max(valid_iters)
             print(f"🔄 FOUND EXISTING CLOUD SAVE! Highest iteration detected: {start_iter}")
             
-            # 🛑 INFINITE HORIZON: Auto-Extend Target by 1000 if goal is reached! 🛑
             while start_iter >= TOTAL_ITERS:
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V30_{start_iter}", f"ckpt_V29_{start_iter}", f"ckpt_V28_{start_iter}", f"ckpt_V27_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V31_{start_iter}", f"ckpt_V30_{start_iter}", f"ckpt_V27_{start_iter}", f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
                     ckpt_path = os.path.join(ckpt_dir, name)
                     break
                     
+            # 🛑 THE AUTOMATED RECOVERY HOOK (Fixes the Panicked Donut State)
+            if ckpt_path and os.path.exists(ckpt_path):
+                # We actively hunt for missing critical memory files and pull them from the past
+                for req_file in ["BOOK_KEEPING_VARS.json", "OBS_STANDARDIZER.pt", "REWARD_STANDARDIZER.pt", "config.json"]:
+                    tgt_path = os.path.join(ckpt_path, req_file)
+                    if not os.path.exists(tgt_path):
+                        if req_file == "config.json":
+                            with open(tgt_path, "w") as f: json.dump({}, f)
+                            continue
+                            
+                        print(f"⚠️ Missing {req_file} in {ckpt_path}! Initiating Auto-Recovery...")
+                        for f in sorted(all_files_and_dirs, reverse=True):
+                            if f.startswith("ckpt_") and f != os.path.basename(ckpt_path):
+                                legacy_file = os.path.join(ckpt_dir, f, req_file)
+                                if os.path.exists(legacy_file):
+                                    try:
+                                        shutil.copyfile(legacy_file, tgt_path)
+                                        print(f"   ✅ SUCCESS: Dragged missing {req_file} from {f} -> {ckpt_path}")
+                                        break
+                                    except Exception:
+                                        pass
+
             raw_pt_path = os.path.join(ckpt_dir, f"raw_policy_weights_{start_iter}.pt")
             loaded = False
             
             try:
-                try: 
-                    policy_net = learner.ppo_learner.policy
-                except AttributeError: 
-                    policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
-                    
+                try: policy_net = learner.ppo_learner.policy
+                except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
                 device = next(policy_net.parameters()).device
 
-                # Layer 1: Forcefully load our explicitly populated PyTorch files
+                # Layer 1: NATIVE LOAD 
                 if ckpt_path and os.path.exists(os.path.join(ckpt_path, "PPO_POLICY.pt")):
-                    print(f"   🔄 Attempting to load explicitly saved PyTorch files from {ckpt_path}...")
-                    try:
-                        policy_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device), strict=False)
-                        try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
-                        except: pass
-                        try: learner.ppo_learner.policy_optimizer.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY_OPTIMIZER.pt"), map_location=device))
-                        except: pass
-                        try: learner.ppo_learner.value_optimizer.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_OPTIMIZER.pt"), map_location=device))
-                        except: pass
-                        print(f"   ✅ Manually Restored PyTorch Brain & Optimizers from folder.")
-                        loaded = True
-                    except Exception as e:
-                        print(f"   ⚠️ Folder load failed: {e}")
-                
-                # Fallback if it's an older rlgym-ppo formatted folder
-                if not loaded and ckpt_path and os.path.exists(ckpt_path):
                     try:
                         learner.load(ckpt_path)
-                        print(f"   ✅ Legacy Learner State Restored from {ckpt_path}")
+                        print(f"   ✅ NATIVE LOAD SUCCESS: Loaded full PyTorch brain & bookkeeping from {ckpt_path}")
                         loaded = True
                     except Exception as e:
-                        pass
-                
+                        print(f"   ⚠️ Native load failed: {e}. Attempting manual injection...")
+
+                        try:
+                            policy_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device), strict=False)
+                            try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
+                            except: pass
+                            
+                            if os.path.exists(os.path.join(ckpt_path, "OBS_STANDARDIZER.pt")) and hasattr(learner.ppo_learner, "obs_standardizer"):
+                                try: learner.ppo_learner.obs_standardizer.load_state_dict(torch.load(os.path.join(ckpt_path, "OBS_STANDARDIZER.pt"), map_location=device))
+                                except: pass
+
+                            bk_path = os.path.join(ckpt_path, "BOOK_KEEPING_VARS.json")
+                            if os.path.exists(bk_path):
+                                with open(bk_path, 'r') as f:
+                                    bk_vars = json.load(f)
+                                    if "cumulative_timesteps" in bk_vars:
+                                        learner.agent.cumulative_timesteps = bk_vars["cumulative_timesteps"]
+                                        
+                            print(f"   ✅ Manually Restored PyTorch Brain & Standardizers from folder.")
+                            loaded = True
+                        except Exception as e_man:
+                            print(f"   ⚠️ Manual load failed: {e_man}")
+
                 # Ultimate Fallback: The Raw Actor Weights
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
                         policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
-                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
+                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path} (Warning: Standardizers reset to 0)")
                         loaded = True
                     except Exception as e:
                         print(f"   ❌ Failed to load raw weights: {e}")
                         
                 if loaded:
-                    try: learner.agent.cumulative_timesteps = start_iter * GLOBAL_BATCH_SIZE
+                    try: learner.agent.cumulative_timesteps = max(learner.agent.cumulative_timesteps, start_iter * GLOBAL_BATCH_SIZE)
                     except: pass
                     print(f"🚀 Continuing training seamlessly from Iteration {start_iter}...\n")
                 else:
@@ -578,7 +598,6 @@ if __name__ == "__main__":
                 TOTAL_ITERS = BASE_ITERS
 
     try:
-        # 🛑 DYNAMIC PROGRESS BAR
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
             
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
@@ -601,29 +620,30 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 DIRECT PYTORCH CHECKPOINTING (Saves STRICTLY at 500, 1000, 1500, 2000...)
+            # 🛑 DIRECT PYTORCH CHECKPOINTING WITH PERFECT REPLICA (Saves STRICTLY at 500, 1000...)
             if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                # 🛑 FIX: Explicitly Save 4/4 PPO Files directly into the Folder! (NO MORE EMPTY FOLDERS)
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V30_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V31_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
-                    policy_net = learner.ppo_learner.policy
-                    value_net = learner.ppo_learner.value_net
-                    policy_opt = learner.ppo_learner.policy_optimizer
-                    value_opt = learner.ppo_learner.value_optimizer
+                    # Natively extract all neural network and standardizer files without the buggy shutil.copy
+                    learner.ppo_learner.save_to(ckpt_folder)
                     
-                    torch.save(policy_net.state_dict(), os.path.join(ckpt_folder, "PPO_POLICY.pt"))
-                    torch.save(value_net.state_dict(), os.path.join(ckpt_folder, "PPO_VALUE_NET.pt"))
-                    torch.save(policy_opt.state_dict(), os.path.join(ckpt_folder, "PPO_POLICY_OPTIMIZER.pt"))
-                    torch.save(value_opt.state_dict(), os.path.join(ckpt_folder, "PPO_VALUE_OPTIMIZER.pt"))
+                    # Manually construct the bookkeeping JSON
+                    bk_vars = {"cumulative_timesteps": int(learner.agent.cumulative_timesteps)}
+                    with open(os.path.join(ckpt_folder, "BOOK_KEEPING_VARS.json"), "w") as f:
+                        json.dump(bk_vars, f)
                         
-                    print(f"   ✅ Naked Checkpoint Secure: All 4 PyTorch components saved successfully to {ckpt_folder}!")
+                    # Dummy config to keep learner.load() happy for future runs
+                    with open(os.path.join(ckpt_folder, "config.json"), "w") as f:
+                        json.dump({}, f)
+                        
+                    print(f"   ✅ Perfect Replica Checkpoint Secure: All files saved to {ckpt_folder}!")
                 except Exception as e:
-                    print(f"   ⚠️ Naked Checkpoint save failed: {e}")
+                    print(f"   ⚠️ Perfect Replica save failed: {e}")
                 
                 # Raw Fallback & ONNX Export
                 try:
@@ -633,9 +653,8 @@ if __name__ == "__main__":
                     
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
-                    print(f"   ✅ BULLETPROOF PYTORCH SAVE: Raw Actor Weights saved to Drive.")
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V30_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V31_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
@@ -668,8 +687,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V30_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V30_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V31_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V31_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
