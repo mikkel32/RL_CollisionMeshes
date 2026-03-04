@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V31)
-# 40-Core EPYC / Automated Recovery Hook / Anti-Donut State Perfect Replica
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V32)
+# 40-Core EPYC / Standardizer Nuked (Pure Math) / Load-WandB Bug Fixed
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -434,7 +434,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V31 MAIN PPO ENGINE (AUTOMATED RECOVERY ENGINE)
+# 7. SOTA V32 MAIN PPO ENGINE (THE PURE MATH ENGINE)
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -445,7 +445,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL INFINITE ENGINE (V31)...")
+    print("🚀 Initializing THE SIM-TO-REAL PURE MATH ENGINE (V32)...")
     
     try:
         temp_env = build_env()
@@ -466,6 +466,7 @@ if __name__ == "__main__":
     EXTENSION_STEP = 1000
     TOTAL_ITERS = BASE_ITERS
     
+    # 🛑 THE NUCLEAR FIX: Standardizers Obliterated 🛑
     learner = Learner(
         build_env,
         n_proc=WORKER_CORES, 
@@ -474,6 +475,12 @@ if __name__ == "__main__":
         exp_buffer_size=GLOBAL_BATCH_SIZE, 
         ppo_minibatch_size=MINI_BATCH, 
         ppo_ent_coef=0.01,
+        
+        # 🛑 THE HOLY GRAIL FIX: Disable the invisible running averages!
+        # Neural Network now strictly learns on pure INV_ algebraic math.
+        # This makes the exported ONNX model 100% plug-and-play in bot.py!
+        standardize_obs=False,
+        standardize_returns=False,
         
         policy_lr=2e-4,
         critic_lr=4e-4, 
@@ -486,7 +493,7 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
-    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL WITH RECOVERY HOOK ♻️ 🛑
+    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
     ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
     
@@ -508,35 +515,14 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V31_{start_iter}", f"ckpt_V30_{start_iter}", f"ckpt_V27_{start_iter}", f"ckpt_{start_iter}"]
+            # Search dynamically across our past version formats
+            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(32, 20, -1)] + [f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
                     ckpt_path = os.path.join(ckpt_dir, name)
                     break
                     
-            # 🛑 THE AUTOMATED RECOVERY HOOK (Fixes the Panicked Donut State)
-            if ckpt_path and os.path.exists(ckpt_path):
-                # We actively hunt for missing critical memory files and pull them from the past
-                for req_file in ["BOOK_KEEPING_VARS.json", "OBS_STANDARDIZER.pt", "REWARD_STANDARDIZER.pt", "config.json"]:
-                    tgt_path = os.path.join(ckpt_path, req_file)
-                    if not os.path.exists(tgt_path):
-                        if req_file == "config.json":
-                            with open(tgt_path, "w") as f: json.dump({}, f)
-                            continue
-                            
-                        print(f"⚠️ Missing {req_file} in {ckpt_path}! Initiating Auto-Recovery...")
-                        for f in sorted(all_files_and_dirs, reverse=True):
-                            if f.startswith("ckpt_") and f != os.path.basename(ckpt_path):
-                                legacy_file = os.path.join(ckpt_dir, f, req_file)
-                                if os.path.exists(legacy_file):
-                                    try:
-                                        shutil.copyfile(legacy_file, tgt_path)
-                                        print(f"   ✅ SUCCESS: Dragged missing {req_file} from {f} -> {ckpt_path}")
-                                        break
-                                    except Exception:
-                                        pass
-
             raw_pt_path = os.path.join(ckpt_dir, f"raw_policy_weights_{start_iter}.pt")
             loaded = False
             
@@ -545,11 +531,15 @@ if __name__ == "__main__":
                 except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
                 device = next(policy_net.parameters()).device
 
-                # Layer 1: NATIVE LOAD 
+                # Layer 1: NATIVE LOAD (With the load_wandb bug patched!)
                 if ckpt_path and os.path.exists(os.path.join(ckpt_path, "PPO_POLICY.pt")):
                     try:
-                        learner.load(ckpt_path)
-                        print(f"   ✅ NATIVE LOAD SUCCESS: Loaded full PyTorch brain & bookkeeping from {ckpt_path}")
+                        # 🛑 FIX 2: Added `load_wandb=False` to patch rlgym_ppo API bug safely
+                        try:
+                            learner.load(ckpt_path, load_wandb=False)
+                        except TypeError:
+                            learner.load(ckpt_path) # Fallback for older rlgym-ppo versions
+                        print(f"   ✅ NATIVE LOAD SUCCESS: Loaded full PyTorch brain from {ckpt_path}")
                         loaded = True
                     except Exception as e:
                         print(f"   ⚠️ Native load failed: {e}. Attempting manual injection...")
@@ -559,10 +549,6 @@ if __name__ == "__main__":
                             try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
                             except: pass
                             
-                            if os.path.exists(os.path.join(ckpt_path, "OBS_STANDARDIZER.pt")) and hasattr(learner.ppo_learner, "obs_standardizer"):
-                                try: learner.ppo_learner.obs_standardizer.load_state_dict(torch.load(os.path.join(ckpt_path, "OBS_STANDARDIZER.pt"), map_location=device))
-                                except: pass
-
                             bk_path = os.path.join(ckpt_path, "BOOK_KEEPING_VARS.json")
                             if os.path.exists(bk_path):
                                 with open(bk_path, 'r') as f:
@@ -570,7 +556,7 @@ if __name__ == "__main__":
                                     if "cumulative_timesteps" in bk_vars:
                                         learner.agent.cumulative_timesteps = bk_vars["cumulative_timesteps"]
                                         
-                            print(f"   ✅ Manually Restored PyTorch Brain & Standardizers from folder.")
+                            print(f"   ✅ Manually Restored PyTorch Brain from folder. (Standardizers safely ignored).")
                             loaded = True
                         except Exception as e_man:
                             print(f"   ⚠️ Manual load failed: {e_man}")
@@ -579,7 +565,7 @@ if __name__ == "__main__":
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
                         policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
-                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path} (Warning: Standardizers reset to 0)")
+                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
                         loaded = True
                     except Exception as e:
                         print(f"   ❌ Failed to load raw weights: {e}")
@@ -620,16 +606,16 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
 
-            # 🛑 DIRECT PYTORCH CHECKPOINTING WITH PERFECT REPLICA (Saves STRICTLY at 500, 1000...)
+            # 🛑 DIRECT PYTORCH CHECKPOINTING (Saves STRICTLY at 500, 1000...)
             if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V31_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V32_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
-                    # Natively extract all neural network and standardizer files without the buggy shutil.copy
+                    # Natively extract neural network files (Standardizers are now officially extinct)
                     learner.ppo_learner.save_to(ckpt_folder)
                     
                     # Manually construct the bookkeeping JSON
@@ -637,7 +623,7 @@ if __name__ == "__main__":
                     with open(os.path.join(ckpt_folder, "BOOK_KEEPING_VARS.json"), "w") as f:
                         json.dump(bk_vars, f)
                         
-                    # Dummy config to keep learner.load() happy for future runs
+                    # Dummy config to keep learner.load() happy
                     with open(os.path.join(ckpt_folder, "config.json"), "w") as f:
                         json.dump({}, f)
                         
@@ -654,7 +640,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V31_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V32_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
@@ -687,8 +673,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V31_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V31_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V32_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V32_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
