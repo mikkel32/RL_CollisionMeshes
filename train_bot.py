@@ -1,5 +1,5 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V115)
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V116)
 # 40-Core EPYC / Lightning Fast VRAM Batches / Zero GC Overhead / 1-Frame Vision
 # ==============================================================================
 
@@ -190,10 +190,9 @@ class TemporalMemoryObservation(ObsBuilder):
         self.action_parser = action_parser
         self.MAX_OPPONENTS = 3
         self.MAX_TEAMMATES = 2
-        # 🚀 SPEED FIX 4: Deque memory banks permanently eradicated to save Global Garbage Collector!
 
     def reset(self, initial_state: GameState): 
-        pass # No memory banks to clear anymore!
+        pass 
 
     def build_obs(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> np.ndarray:
         if player.team_num == 1: 
@@ -345,7 +344,6 @@ class TemporalMemoryObservation(ObsBuilder):
         except Exception:
             obs.extend([0.0] * 8)
 
-        # 🚀 SPEED FIX 4: Returned array natively. Zero deques, zero string concatenations. C-Level speed!
         obs_arr = np.array(obs, dtype=np.float32)
         if not np.isfinite(obs_arr).all():
             obs_arr = np.nan_to_num(obs_arr)
@@ -503,18 +501,18 @@ def build_env():
     env = rlgym_sim.make(
         tick_skip=8, team_size=3, spawn_opponents=True,
         reward_fn=reward_fn, 
-        # 🚀 SPEED FIX 3: Frame Stacking Redundancy Bypassed! history_size defaults to 1 organically.
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(timeout_seconds=15)]
+        # 🛑 FIXED: NoTouchTimeoutCondition properly maps 15s to 225 steps
+        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(225)]
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V115 MAIN PPO ENGINE
+# 7. SOTA V116 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -524,7 +522,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V115 SPEED DEMON)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V116 SPEED DEMON)...")
     
     try:
         temp_env = build_env()
@@ -543,9 +541,6 @@ if __name__ == "__main__":
     
     GLOBAL_BATCH_SIZE = 100_000 
     EXP_BUFFER = 100_000 
-    
-    # 🚀 SPEED FIX 2: VRAM Saturation Overdrive!
-    # Mini-batch massively increased, Epochs dropped to stop calculating dead/clipped gradients!
     MINI_BATCH = 50_000 
     
     BASE_ITERS = 2000
@@ -567,7 +562,6 @@ if __name__ == "__main__":
         policy_lr=2e-4,
         critic_lr=4e-4, 
         
-        # 🚀 SPEED FIX 2: Epochs reduced to 3!
         ppo_epochs=3, 
         
         policy_layer_sizes=(512, 512, 512),               
@@ -625,7 +619,6 @@ if __name__ == "__main__":
                     except Exception as e:
                         print(f"   ⚠️ Native load failed. Attempting manual injection...")
                         try:
-                            # strict=False allows the network to flawlessly adapt to the newly-shrunk Observation Matrix!
                             policy_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device), strict=False)
                             try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
                             except: pass
@@ -641,7 +634,7 @@ if __name__ == "__main__":
                                     if "cumulative_timesteps" in bk_vars:
                                         learner.agent.cumulative_timesteps = bk_vars["cumulative_timesteps"]
                                         
-                            print(f"   ✅ Manually Restored PyTorch Brain from folder. (Expect Shape mismatch prints due to History Truncation!)")
+                            print(f"   ✅ Manually Restored PyTorch Brain from folder.")
                             loaded = True
                         except Exception as e_man:
                             print(f"   ⚠️ Manual load failed: {e_man}")
@@ -649,7 +642,7 @@ if __name__ == "__main__":
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
                         policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
-                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}. (Expect Shape mismatch prints due to History Truncation!)")
+                        print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
                         loaded = True
                     except Exception as e:
                         print(f"   ❌ Failed to load raw weights: {e}")
@@ -703,7 +696,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V115_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V116_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -728,7 +721,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V115_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V116_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
@@ -761,8 +754,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V115_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V115_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V116_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V116_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
