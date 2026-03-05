@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V116)
-# 40-Core EPYC / Lightning Fast VRAM Batches / Zero GC Overhead / 1-Frame Vision
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V120)
+# 40-Core EPYC / 1v1 ONLY / 1000-Point Goals / 5k Iters / Zero Useless Actions
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -21,6 +21,7 @@ import traceback
 import json
 import shutil
 import logging
+from collections import deque
 from typing import Any
 import multiprocessing as mp
 
@@ -94,7 +95,7 @@ class ActionDelayWrapper(gym.Wrapper):
     def step(self, action):
         action_arr = np.array(action, copy=True)
         
-        # Dynamically matches exact array shape safely!
+        # Dynamically matches exact array shape safely (flawless for 1v1s)
         if len(self.action_buffer) == 0 and self.current_delay > 0:
             idle_arr = np.full_like(action_arr, self.idle_action_idx)
             for _ in range(self.current_delay):
@@ -182,12 +183,15 @@ class SOTAActionParser(ActionParser):
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. ULTRA-FAST OBSERVATION BUILDER (Deque Memory Murder Cured)
+# 3. ULTRA-FAST OBSERVATION BUILDER (The Ghost Padding Matrix)
 # ------------------------------------------------------------------------------
 class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
+        # 🛑 1V1 PRESERVATION TRICK: 
+        # Leaving these at 3 and 2 guarantees the NN input stays EXACTLY at 156 variables.
+        # This allows 100% flawless auto-resuming from 3v3 models into 1v1 without crashing!
         self.MAX_OPPONENTS = 3
         self.MAX_TEAMMATES = 2
 
@@ -288,7 +292,7 @@ class TemporalMemoryObservation(ObsBuilder):
             added_opps += 1
             
         for _ in range(self.MAX_OPPONENTS - added_opps):
-            # 🏆 GENIUS CONFIG: Ghost Player padding safely pushed 10,240 units out-of-bounds!
+            # In 1v1, the missing 3v3 opponents safely get padded out of bounds here!
             obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         teammates = [other for other in state.players if other.team_num == player.team_num and other.car_id != player.car_id]
@@ -329,6 +333,7 @@ class TemporalMemoryObservation(ObsBuilder):
             added_tm8s += 1
             
         for _ in range(self.MAX_TEAMMATES - added_tm8s):
+            # In 1v1, the missing 3v3 teammates safely get padded out of bounds here!
             obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         try:
@@ -351,17 +356,49 @@ class TemporalMemoryObservation(ObsBuilder):
         return obs_arr
 
 # ------------------------------------------------------------------------------
-# 4. ALGEBRAICALLY PERFECT REWARD SHAPING
+# 4. ALGEBRAICALLY PERFECT REWARD SHAPING (The 1v1 Striker Math)
 # ------------------------------------------------------------------------------
-class CompoundAerialReward(RewardFunction):
+class OffensivePushReward(RewardFunction):
+    """
+    The Striker's Breadcrumb.
+    Rewards the bot for driving fast at the ball ONLY if it is on the correct side 
+    of the play (pushing the ball towards the enemy net). Cures "Freestyler Syndrome."
+    """
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        if player.on_ground or state.ball.position[2] < 300:
+        bx, by, bz = state.ball.position
+        px, py, pz = player.car_data.position
+        
+        gy = 5120.0 if player.team_num == 0 else -5120.0
+        
+        c2bx, c2by, c2bz = bx - px, by - py, bz - pz
+        c2b_mag = math.sqrt(c2bx**2 + c2by**2 + c2bz**2)
+        
+        b2gx, b2gy, b2gz = 0.0 - bx, gy - by, 0.0 - bz
+        b2g_mag = math.sqrt(b2gx**2 + b2gy**2 + b2gz**2)
+        
+        if c2b_mag > 0 and b2g_mag > 0:
+            alignment = (c2bx*b2gx + c2by*b2gy + c2bz*b2gz) / (c2b_mag * b2g_mag)
+            
+            # Ensures the bot approaches from BEHIND the ball relative to the enemy net
+            if alignment > 0:
+                vx, vy, vz = player.car_data.linear_velocity
+                vel_to_ball = (vx*c2bx + vy*c2by + vz*c2bz) / c2b_mag
+                if vel_to_ball > 0:
+                    return float(alignment * (vel_to_ball * INV_2300))
+        return 0.0
+
+class CompoundAerialReward(RewardFunction):
+    def reset(self, initial_state: GameState): pass
+    
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        px, py, pz = player.car_data.position
+        
+        if player.on_ground or pz < 250.0 or state.ball.position[2] < 350.0:
             return 0.0 
         
         bx, by, bz = state.ball.position
         bvx, bvy, bvz = state.ball.linear_velocity
-        px, py, pz = player.car_data.position
         vx, vy, vz = player.car_data.linear_velocity
         
         pred_bx = bx + (bvx * 0.4)
@@ -374,12 +411,13 @@ class CompoundAerialReward(RewardFunction):
         shaping_rew = 0.0
         if dist > 0:
             vel_to_pred_ball = (vx*dx + vy*dy + vz*dz) / dist
-            shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * 0.05
+            height_mult = max(0.0, (pz - 250.0) * INV_2044)
+            shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * height_mult * 2.0 
             
         touch_rew = 0.0
         if player.ball_touched:
-            height_factor = min(max(pz, 0.0) * INV_2044, 1.0) 
-            touch_rew = float(height_factor)
+            height_frac = min(max(pz, 0.0) * INV_2044, 1.0) 
+            touch_rew = float(height_frac) * 20.0 
             
         return float(shaping_rew + touch_rew)
 
@@ -426,30 +464,42 @@ class KinestheticShadowDefense(RewardFunction):
         return float(dist_factor * max(0.0, align) * v_mult)
 
 # ------------------------------------------------------------------------------
-# 5. CURRICULUM MUTATORS
+# 5. CURRICULUM MUTATORS (The 1v1 Gauntlet)
 # ------------------------------------------------------------------------------
 class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
         scenario = random.random()
         
-        if scenario < 0.35:
-            wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-1000, 1000), random.uniform(1500, 1950))
-            wrapper.ball.set_lin_vel(0.0, 0.0, 0.0)
+        if scenario < 0.30:
+            # 🎯 30% KICKOFFS: The most important mechanic in 1v1.
+            DefaultState().reset(wrapper)
+                
+        elif scenario < 0.50:
+            # 🎯 20% THE STRIKER PACK (Direct Shooting Practice)
+            team_side = random.choice([-1.0, 1.0])
+            wrapper.ball.set_pos(random.uniform(-1000, 1000), 2000.0 * team_side, 100.0)
+            wrapper.ball.set_lin_vel(0.0, 1000.0 * team_side, 0.0)
+            
             for car in wrapper.cars:
-                y_pos = -2000.0 if car.team_num == 0 else 2000.0
-                yaw = math.pi / 2 if car.team_num == 0 else -math.pi / 2
-                
-                car.set_pos(random.uniform(-1000, 1000), y_pos, 17.05)
-                car.set_rot(0.0, yaw, 0.0)
-                car.set_lin_vel(0.0, 0.0, 0.0)
-                car.boost = random.uniform(0.1, 1.0)
-                
-        elif scenario < 0.60:
+                if (team_side == 1.0 and car.team_num == 0) or (team_side == -1.0 and car.team_num == 1):
+                    # Attacker placed directly behind ball
+                    car.set_pos(wrapper.ball.position[0] + random.uniform(-200, 200), 1000.0 * team_side, 17.05)
+                    car.set_rot(0.0, (math.pi/2) * team_side, 0.0)
+                    car.set_lin_vel(0.0, 1500.0 * team_side, 0.0)
+                    car.boost = random.uniform(0.5, 1.0)
+                else:
+                    # Defender in goal
+                    car.set_pos(random.uniform(-800, 800), 5100.0 * team_side, 17.05)
+                    car.set_rot(0.0, (math.pi/2) * -team_side, 0.0)
+                    car.set_lin_vel(0.0, 0.0, 0.0)
+                    car.boost = random.uniform(0.1, 0.5)
+
+        elif scenario < 0.70:
+            # 🛡️ 20% SIDE WALL / CROSS DEFENSE
             side = random.choice([-1.0, 1.0])
             y_dir = random.choice([-1.0, 1.0]) 
             for car in wrapper.cars:
                 is_defending = (y_dir == 1.0 and car.team_num == 1) or (y_dir == -1.0 and car.team_num == 0)
-                
                 if is_defending:
                     car.set_pos(random.uniform(-800, 800), 5100.0 * y_dir, 17.05)
                     car.set_rot(0.0, (math.pi/2) * -y_dir, 0.0) 
@@ -458,13 +508,13 @@ class EscalateMutator(StateSetter):
                     car.set_pos(3000.0 * side + random.uniform(-500, 500), -500.0 * y_dir + random.uniform(-500, 500), 200.0)
                     car.set_rot(0.0, (math.pi/2) * y_dir, 0.0) 
                     car.set_lin_vel(0.0, 1500.0 * y_dir, 600.0)
-                
                 car.boost = random.uniform(0.1, 1.0)
             
             wrapper.ball.set_pos(3000.0 * side, 100.0 * y_dir, 900.0)
             wrapper.ball.set_lin_vel(0.0, 1500.0 * y_dir, 600.0)
             
         elif scenario < 0.85:
+            # ✈️ 15% AERIAL INTERCEPTS
             wrapper.ball.set_pos(random.uniform(-2000, 2000), random.uniform(-2000, 2000), random.uniform(800, 1500))
             wrapper.ball.set_lin_vel(random.uniform(-800, 800), random.uniform(-800, 800), random.uniform(300, 700))
             for car in wrapper.cars:
@@ -472,9 +522,25 @@ class EscalateMutator(StateSetter):
                 car.set_rot(random.uniform(-math.pi, math.pi), random.uniform(-math.pi, math.pi), random.uniform(-math.pi, math.pi))
                 car.set_ang_vel(random.uniform(-5, 5), random.uniform(-5, 5), random.uniform(-5, 5))
                 car.boost = random.uniform(0.0, 0.5)
-                
+
         else:
-            DefaultState().reset(wrapper)
+            # 🎮 15% GROUND DRIBBLES & FLICKS (The 1v1 special)
+            team_side = random.choice([-1.0, 1.0])
+            wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-2000, 2000), 200.0)
+            wrapper.ball.set_lin_vel(0.0, random.uniform(500, 1000) * team_side, 0.0)
+            for car in wrapper.cars:
+                if (team_side == 1.0 and car.team_num == 0) or (team_side == -1.0 and car.team_num == 1):
+                    # Attacker perfectly underneath ball
+                    car.set_pos(wrapper.ball.position[0], wrapper.ball.position[1] - (100 * team_side), 17.05)
+                    car.set_rot(0.0, (math.pi/2) * team_side, 0.0)
+                    car.set_lin_vel(0.0, wrapper.ball.linear_velocity[1], 0.0)
+                    car.boost = 1.0
+                else:
+                    # Defender waiting in net
+                    car.set_pos(random.uniform(-800, 800), 5100.0 * team_side, 17.05)
+                    car.set_rot(0.0, (math.pi/2) * -team_side, 0.0)
+                    car.set_lin_vel(0.0, 0.0, 0.0)
+                    car.boost = random.uniform(0.1, 0.5)
 
 # ------------------------------------------------------------------------------
 # 6. ENVIRONMENT GENERATION
@@ -484,27 +550,30 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 V120 1v1 ANTI-USELESS MATRIX:
+    # 1000 Point Goal. Demolitions heavily rewarded for 1v1 control!
     reward_fn = CombinedReward(
         (
-            EventReward(goal=100.0, concede=-100.0), 
+            EventReward(goal=1000.0, concede=-1000.0, shot=50.0, save=50.0, demo=15.0), 
             VelocityBallToGoalReward(),            
+            OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
             CompoundAerialReward(),       
-            KinestheticShadowDefense()    
+            KinestheticShadowDefense()
         ),
-        (1.0, 0.05, 0.015, 0.05, 0.01)    
+        (1.0, 0.15, 0.08, 0.02, 0.05, 0.02)    
     )
     
     action_parser = SOTAActionParser()
     robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
     
+    # 🛑 1V1 MODE ACTIVATED: Team size set strictly to 1.
     env = rlgym_sim.make(
-        tick_skip=8, team_size=3, spawn_opponents=True,
+        tick_skip=8, team_size=1, spawn_opponents=True,
         reward_fn=reward_fn, 
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        # 🛑 FIXED: NoTouchTimeoutCondition properly maps 15s to 225 steps
         terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(225)]
     )
     
@@ -512,7 +581,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V116 MAIN PPO ENGINE
+# 7. SOTA V120 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -522,7 +591,7 @@ if __name__ == "__main__":
         
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V116 SPEED DEMON)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V120 1v1 DUELIST)...")
     
     try:
         temp_env = build_env()
@@ -532,7 +601,7 @@ if __name__ == "__main__":
         
         act_size = temp_env.action_space.n 
         temp_env.close()
-        print(f"✅ Domain Randomization Env Built! True 3v3 Obs Size: {obs_size} | Optimized Actions: {act_size}")
+        print(f"✅ Domain Randomization Env Built! True 1v1 Obs Size: {obs_size} (Padding Safe!) | Optimized Actions: {act_size}")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
@@ -543,8 +612,9 @@ if __name__ == "__main__":
     EXP_BUFFER = 100_000 
     MINI_BATCH = 50_000 
     
-    BASE_ITERS = 2000
-    EXTENSION_STEP = 1000
+    # 🛑 SOTA V120 FIX: 5k Deep Learning Horizons Activated
+    BASE_ITERS = 5000
+    EXTENSION_STEP = 2000
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
@@ -593,7 +663,7 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(125, 20, -1)] + [f"ckpt_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(130, 20, -1)] + [f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -696,7 +766,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V116_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V130_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -721,7 +791,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V116_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V130_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
@@ -754,8 +824,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V116_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V116_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V130_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V130_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
