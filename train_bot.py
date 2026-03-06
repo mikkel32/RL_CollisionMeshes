@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V120)
-# 40-Core EPYC / 1v1 ONLY / 1000-Point Goals / 5k Iters / Zero Useless Actions
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V165)
+# 40-Core EPYC / ONNX Logit-Lock Fixed / 1v1 Striker Oracle
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -21,7 +21,6 @@ import traceback
 import json
 import shutil
 import logging
-from collections import deque
 from typing import Any
 import multiprocessing as mp
 
@@ -46,7 +45,7 @@ import rlgym_sim
 from rlgym_sim.utils.gamestates import GameState, PlayerData
 from rlgym_sim.utils.obs_builders import ObsBuilder
 from rlgym_sim.utils.action_parsers import ActionParser
-from rlgym_sim.utils.reward_functions import RewardFunction, CombinedReward
+from rlgym_sim.utils.reward_functions import RewardFunction
 from rlgym_sim.utils.state_setters import StateSetter, StateWrapper, DefaultState
 from rlgym_ppo import Learner
 
@@ -70,10 +69,18 @@ INV_8300 = 1.0 / 8300.0
 INV_10240= 1.0 / 10240.0
 INV_3000 = 1.0 / 3000.0
 
-# Hitbox normalization constants
 INV_150 = 1.0 / 150.0  
 INV_100 = 1.0 / 100.0  
 INV_50  = 1.0 / 50.0   
+
+def cleanup_trackers():
+    """Wipes old telemetry logic to prevent JSON bloating"""
+    try:
+        for f in os.listdir("/tmp"):
+            if f.startswith('rlgym_reward_telemetry_') and f.endswith('.json'):
+                try: os.remove(os.path.join("/tmp", f))
+                except: pass
+    except: pass
 
 # ------------------------------------------------------------------------------
 # 1. DOMAIN RANDOMIZATION WRAPPERS (Sim-to-Real Protection)
@@ -94,8 +101,6 @@ class ActionDelayWrapper(gym.Wrapper):
 
     def step(self, action):
         action_arr = np.array(action, copy=True)
-        
-        # Dynamically matches exact array shape safely (flawless for 1v1s)
         if len(self.action_buffer) == 0 and self.current_delay > 0:
             idle_arr = np.full_like(action_arr, self.idle_action_idx)
             for _ in range(self.current_delay):
@@ -138,12 +143,24 @@ def revert_collision_meshes():
                     try: os.rename(os.path.join(root, filename), os.path.join(root, f"mesh_{match.group(1)}.cmf"))
                     except OSError: pass
 
+# 🚀 CRITICAL FIX: Explicitly target policy_net so we export 648 logits, not a sampled integer!
 class RLBotONNXWrapper(torch.nn.Module):
     def __init__(self, policy):
         super().__init__()
-        self.net = getattr(policy, "model", policy)
+        # rlgym-ppo DiscretePolicy stores the actual neural net as 'policy_net'
+        if hasattr(policy, "policy_net"):
+            self.net = policy.policy_net
+        elif hasattr(policy, "model"):
+            self.net = policy.model
+        else:
+            self.net = policy
+
     def forward(self, x):
-        return self.net(x)
+        out = self.net(x)
+        # Failsafe if the model somehow still returns a tuple (action, log_prob)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
 
 # ------------------------------------------------------------------------------
 # 2. VECTORIZED ACTION PARSER (Masterclass 648-Bin Compression)
@@ -156,8 +173,6 @@ class SOTAActionParser(ActionParser):
     def _make_bins(self):
         bins = []
         for throttle in [-1.0, 0.0, 1.0]:
-            # 🏆 GENIUS CONFIG: Steer & Yaw locked to shared variable. 
-            # Reduces 1,944 combinations to 648 seamlessly.
             for steer_yaw in [-1.0, 0.0, 1.0]:
                 for pitch in [-1.0, 0.0, 1.0]:
                     for roll in [-1.0, 0.0, 1.0]:
@@ -189,9 +204,6 @@ class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
-        # 🛑 1V1 PRESERVATION TRICK: 
-        # Leaving these at 3 and 2 guarantees the NN input stays EXACTLY at 156 variables.
-        # This allows 100% flawless auto-resuming from 3v3 models into 1v1 without crashing!
         self.MAX_OPPONENTS = 3
         self.MAX_TEAMMATES = 2
 
@@ -261,8 +273,7 @@ class TemporalMemoryObservation(ObsBuilder):
         
         added_opps = 0
         for other in opponents:
-            if added_opps >= self.MAX_OPPONENTS:
-                break
+            if added_opps >= self.MAX_OPPONENTS: break
                 
             o_car = other.inverted_car_data if player.team_num == 1 else other.car_data
             ox, oy, oz = o_car.position
@@ -292,7 +303,6 @@ class TemporalMemoryObservation(ObsBuilder):
             added_opps += 1
             
         for _ in range(self.MAX_OPPONENTS - added_opps):
-            # In 1v1, the missing 3v3 opponents safely get padded out of bounds here!
             obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         teammates = [other for other in state.players if other.team_num == player.team_num and other.car_id != player.car_id]
@@ -302,8 +312,7 @@ class TemporalMemoryObservation(ObsBuilder):
         
         added_tm8s = 0
         for other in teammates:
-            if added_tm8s >= self.MAX_TEAMMATES:
-                break
+            if added_tm8s >= self.MAX_TEAMMATES: break
                 
             t_car = other.inverted_car_data if player.team_num == 1 else other.car_data
             tx, ty, tz = t_car.position
@@ -333,7 +342,6 @@ class TemporalMemoryObservation(ObsBuilder):
             added_tm8s += 1
             
         for _ in range(self.MAX_TEAMMATES - added_tm8s):
-            # In 1v1, the missing 3v3 teammates safely get padded out of bounds here!
             obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         try:
@@ -356,14 +364,44 @@ class TemporalMemoryObservation(ObsBuilder):
         return obs_arr
 
 # ------------------------------------------------------------------------------
-# 4. ALGEBRAICALLY PERFECT REWARD SHAPING (The 1v1 Striker Math)
+# 4. ALGEBRAICALLY PERFECT REWARD SHAPING & TRACKING
 # ------------------------------------------------------------------------------
+class TrackedCombinedReward(RewardFunction):
+    def __init__(self, reward_functions, reward_weights):
+        super().__init__()
+        self.reward_functions = tuple(reward_functions)
+        self.reward_weights = tuple(reward_weights)
+        self.names = ["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "Aerial", "ShadowDef", "Recovery", "Boost"]
+        self.stats = {name: 0.0 for name in self.names}
+        self.steps = 0
+        
+    def reset(self, initial_state: GameState):
+        for func in self.reward_functions:
+            func.reset(initial_state)
+
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        total_reward = 0.0
+        for i, func in enumerate(self.reward_functions):
+            r = func.get_reward(player, state, prev_action) * self.reward_weights[i]
+            self.stats[self.names[i]] += r
+            total_reward += r
+            
+        self.steps += 1
+        
+        if self.steps % 5000 == 0:
+            try:
+                os.makedirs("/tmp", exist_ok=True)
+                avg_stats = {k: v/5000 for k, v in self.stats.items()}
+                with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
+                    json.dump(avg_stats, f)
+                for k in self.names:
+                    self.stats[k] = 0.0
+            except Exception: 
+                pass
+                
+        return float(total_reward)
+
 class OffensivePushReward(RewardFunction):
-    """
-    The Striker's Breadcrumb.
-    Rewards the bot for driving fast at the ball ONLY if it is on the correct side 
-    of the play (pushing the ball towards the enemy net). Cures "Freestyler Syndrome."
-    """
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         bx, by, bz = state.ball.position
@@ -379,8 +417,6 @@ class OffensivePushReward(RewardFunction):
         
         if c2b_mag > 0 and b2g_mag > 0:
             alignment = (c2bx*b2gx + c2by*b2gy + c2bz*b2gz) / (c2b_mag * b2g_mag)
-            
-            # Ensures the bot approaches from BEHIND the ball relative to the enemy net
             if alignment > 0:
                 vx, vy, vz = player.car_data.linear_velocity
                 vel_to_ball = (vx*c2bx + vy*c2by + vz*c2bz) / c2b_mag
@@ -394,7 +430,7 @@ class CompoundAerialReward(RewardFunction):
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         px, py, pz = player.car_data.position
         
-        if player.on_ground or pz < 250.0 or state.ball.position[2] < 350.0:
+        if player.on_ground or pz < 100.0 or state.ball.position[2] < 250.0:
             return 0.0 
         
         bx, by, bz = state.ball.position
@@ -411,7 +447,7 @@ class CompoundAerialReward(RewardFunction):
         shaping_rew = 0.0
         if dist > 0:
             vel_to_pred_ball = (vx*dx + vy*dy + vz*dz) / dist
-            height_mult = max(0.0, (pz - 250.0) * INV_2044)
+            height_mult = max(0.0, (pz - 100.0) * INV_2044)
             shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * height_mult * 2.0 
             
         touch_rew = 0.0
@@ -420,6 +456,32 @@ class CompoundAerialReward(RewardFunction):
             touch_rew = float(height_frac) * 20.0 
             
         return float(shaping_rew + touch_rew)
+
+class RecoveryReward(RewardFunction):
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        if not player.on_ground:
+            return float(max(0.0, player.car_data.up()[2]) * 0.005)
+        return 0.0
+
+class DynamicBoostReward(RewardFunction):
+    def __init__(self):
+        super().__init__()
+        self.last_boost = {}
+
+    def reset(self, initial_state: GameState):
+        self.last_boost.clear()
+
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        rew = 0.0
+        current_boost = player.boost_amount
+        last_b = self.last_boost.get(player.car_id, current_boost)
+        
+        if current_boost > last_b:
+            rew = math.sqrt(current_boost) - math.sqrt(max(0.0, last_b))
+            
+        self.last_boost[player.car_id] = current_boost
+        return float(rew * 0.05)
 
 class KinestheticShadowDefense(RewardFunction):
     def reset(self, initial_state: GameState): pass
@@ -464,38 +526,33 @@ class KinestheticShadowDefense(RewardFunction):
         return float(dist_factor * max(0.0, align) * v_mult)
 
 # ------------------------------------------------------------------------------
-# 5. CURRICULUM MUTATORS (The 1v1 Gauntlet)
+# 5. CURRICULUM MUTATORS
 # ------------------------------------------------------------------------------
 class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
         scenario = random.random()
         
         if scenario < 0.30:
-            # 🎯 30% KICKOFFS: The most important mechanic in 1v1.
             DefaultState().reset(wrapper)
                 
         elif scenario < 0.50:
-            # 🎯 20% THE STRIKER PACK (Direct Shooting Practice)
             team_side = random.choice([-1.0, 1.0])
             wrapper.ball.set_pos(random.uniform(-1000, 1000), 2000.0 * team_side, 100.0)
             wrapper.ball.set_lin_vel(0.0, 1000.0 * team_side, 0.0)
             
             for car in wrapper.cars:
                 if (team_side == 1.0 and car.team_num == 0) or (team_side == -1.0 and car.team_num == 1):
-                    # Attacker placed directly behind ball
                     car.set_pos(wrapper.ball.position[0] + random.uniform(-200, 200), 1000.0 * team_side, 17.05)
                     car.set_rot(0.0, (math.pi/2) * team_side, 0.0)
                     car.set_lin_vel(0.0, 1500.0 * team_side, 0.0)
                     car.boost = random.uniform(0.5, 1.0)
                 else:
-                    # Defender in goal
                     car.set_pos(random.uniform(-800, 800), 5100.0 * team_side, 17.05)
                     car.set_rot(0.0, (math.pi/2) * -team_side, 0.0)
                     car.set_lin_vel(0.0, 0.0, 0.0)
                     car.boost = random.uniform(0.1, 0.5)
 
         elif scenario < 0.70:
-            # 🛡️ 20% SIDE WALL / CROSS DEFENSE
             side = random.choice([-1.0, 1.0])
             y_dir = random.choice([-1.0, 1.0]) 
             for car in wrapper.cars:
@@ -514,7 +571,6 @@ class EscalateMutator(StateSetter):
             wrapper.ball.set_lin_vel(0.0, 1500.0 * y_dir, 600.0)
             
         elif scenario < 0.85:
-            # ✈️ 15% AERIAL INTERCEPTS
             wrapper.ball.set_pos(random.uniform(-2000, 2000), random.uniform(-2000, 2000), random.uniform(800, 1500))
             wrapper.ball.set_lin_vel(random.uniform(-800, 800), random.uniform(-800, 800), random.uniform(300, 700))
             for car in wrapper.cars:
@@ -524,19 +580,16 @@ class EscalateMutator(StateSetter):
                 car.boost = random.uniform(0.0, 0.5)
 
         else:
-            # 🎮 15% GROUND DRIBBLES & FLICKS (The 1v1 special)
             team_side = random.choice([-1.0, 1.0])
             wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-2000, 2000), 200.0)
             wrapper.ball.set_lin_vel(0.0, random.uniform(500, 1000) * team_side, 0.0)
             for car in wrapper.cars:
                 if (team_side == 1.0 and car.team_num == 0) or (team_side == -1.0 and car.team_num == 1):
-                    # Attacker perfectly underneath ball
                     car.set_pos(wrapper.ball.position[0], wrapper.ball.position[1] - (100 * team_side), 17.05)
                     car.set_rot(0.0, (math.pi/2) * team_side, 0.0)
                     car.set_lin_vel(0.0, wrapper.ball.linear_velocity[1], 0.0)
                     car.boost = 1.0
                 else:
-                    # Defender waiting in net
                     car.set_pos(random.uniform(-800, 800), 5100.0 * team_side, 17.05)
                     car.set_rot(0.0, (math.pi/2) * -team_side, 0.0)
                     car.set_lin_vel(0.0, 0.0, 0.0)
@@ -550,24 +603,23 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # 🛑 V120 1v1 ANTI-USELESS MATRIX:
-    # 1000 Point Goal. Demolitions heavily rewarded for 1v1 control!
-    reward_fn = CombinedReward(
+    reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=1000.0, concede=-1000.0, shot=50.0, save=50.0, demo=15.0), 
+            EventReward(goal=15.0, concede=-15.0, shot=2.0, save=4.0, demo=1.5, touch=0.2), 
             VelocityBallToGoalReward(),            
             OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
             CompoundAerialReward(),       
-            KinestheticShadowDefense()
+            KinestheticShadowDefense(),
+            RecoveryReward(),
+            DynamicBoostReward()
         ),
-        (1.0, 0.15, 0.08, 0.02, 0.05, 0.02)    
+        (1.0, 0.15, 0.08, 0.06, 0.12, 0.02, 0.05, 0.05)    
     )
     
     action_parser = SOTAActionParser()
     robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
     
-    # 🛑 1V1 MODE ACTIVATED: Team size set strictly to 1.
     env = rlgym_sim.make(
         tick_skip=8, team_size=1, spawn_opponents=True,
         reward_fn=reward_fn, 
@@ -581,7 +633,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V120 MAIN PPO ENGINE
+# 7. SOTA V165 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -589,9 +641,10 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
         
+    cleanup_trackers()
     revert_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V120 1v1 DUELIST)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V165 LOBOTOMY CURE)...")
     
     try:
         temp_env = build_env()
@@ -601,18 +654,17 @@ if __name__ == "__main__":
         
         act_size = temp_env.action_space.n 
         temp_env.close()
-        print(f"✅ Domain Randomization Env Built! True 1v1 Obs Size: {obs_size} (Padding Safe!) | Optimized Actions: {act_size}")
+        print(f"✅ Domain Randomization Env Built! True 1v1 Obs Size: {obs_size} | Optimized Actions: {act_size}")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
 
-    WORKER_CORES = min(40, mp.cpu_count()) 
+    WORKER_CORES = min(60, mp.cpu_count()) 
     
     GLOBAL_BATCH_SIZE = 100_000 
-    EXP_BUFFER = 100_000 
-    MINI_BATCH = 50_000 
+    EXP_BUFFER = 300_000 
+    MINI_BATCH = 20_000 
     
-    # 🛑 SOTA V120 FIX: 5k Deep Learning Horizons Activated
     BASE_ITERS = 5000
     EXTENSION_STEP = 2000
     TOTAL_ITERS = BASE_ITERS
@@ -632,7 +684,7 @@ if __name__ == "__main__":
         policy_lr=2e-4,
         critic_lr=4e-4, 
         
-        ppo_epochs=3, 
+        ppo_epochs=4, 
         
         policy_layer_sizes=(512, 512, 512),               
         critic_layer_sizes=(512, 512, 512),      
@@ -663,7 +715,7 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(130, 20, -1)] + [f"ckpt_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(165, 20, -1)] + [f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -740,7 +792,6 @@ if __name__ == "__main__":
             
             torch.set_num_threads(WORKER_CORES) 
             learner.ppo_learner.learn(learner.experience_buffer)
-            learner.experience_buffer.clear()
             
             learner.agent.cumulative_timesteps += steps
             
@@ -761,12 +812,56 @@ if __name__ == "__main__":
             
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
+            
+            if (i + 1) > start_iter and (i + 1) % 50 == 0:
+                print("\n" + "═"*60)
+                print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
+                
+                if isinstance(metrics, dict):
+                    print(f"PPO Avg Reward/Step:  {metrics.get('Average Reward', 'N/A')}")
+                else:
+                    print(f"PPO Avg Reward/Step:  N/A")
+                    
+                p_loss = getattr(learner.ppo_learner, 'policy_loss', 'N/A')
+                v_loss = getattr(learner.ppo_learner, 'value_loss', 'N/A')
+                ent = getattr(learner.ppo_learner, 'entropy', 'N/A')
+                if isinstance(p_loss, torch.Tensor): p_loss = p_loss.item()
+                if isinstance(v_loss, torch.Tensor): v_loss = v_loss.item()
+                if isinstance(ent, torch.Tensor): ent = ent.item()
+                
+                print(f"Policy Loss:          {p_loss}")
+                print(f"Value Loss (Critic):  {v_loss}")
+                print(f"Entropy:              {ent}")
+                
+                try:
+                    telemetry_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_reward_telemetry_") and f.endswith(".json")]
+                    aggregated = {}
+                    count = 0
+                    for tf in telemetry_files:
+                        try:
+                            with open(tf, "r") as f:
+                                data = json.load(f)
+                                for k, v in data.items():
+                                    aggregated[k] = aggregated.get(k, 0.0) + v
+                            count += 1
+                        except: pass
+                    
+                    if count > 0:
+                        print("\n🧠 LATEST REWARD CALCULATION BREAKDOWN (Avg Impact per Step):")
+                        avg_data = {k: v/count for k,v in aggregated.items()}
+                        for k, v in sorted(avg_data.items(), key=lambda item: abs(item[1]), reverse=True):
+                            print(f"  -> {k:<15}: {v:+.6f}")
+                    else:
+                        print("\n  -> (Awaiting Telemetry Sync...)")
+                except Exception:
+                    print("\n  -> (Awaiting Telemetry Sync...)")
+                print("═"*60 + "\n")
 
             if (i + 1) > start_iter and (i + 1) % 500 == 0:
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V130_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V165_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -791,8 +886,10 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V130_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V165_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
+                    
+                    # 🚀 CRITICAL FIX DEPLOYED: Correctly extracts the neural net to prevent Categorical.sample() lobotomies
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
                     torch.onnx.export(
@@ -802,7 +899,7 @@ if __name__ == "__main__":
                         dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
                     )
                     policy_net.train() 
-                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Dynamic-Batched model saved to Drive.")
+                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Cured 648-Logit model saved to Drive.")
                 except Exception as e_pt:
                     print(f"   ❌ FATAL: Override Backup Failed: {e_pt}")
 
@@ -811,6 +908,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n🚨 CRASH DURING TRAINING:\n{traceback.format_exc()}")
     finally:
+        cleanup_trackers()
         learner.cleanup()
 
     print("\n🔥 Training Concluded! Quantizing final ACTOR ONLY to ONNX...")
@@ -824,8 +922,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V130_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V130_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V165_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V165_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
