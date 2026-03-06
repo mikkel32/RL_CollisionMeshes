@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V161)
-# 40-Core EPYC / Direct Mesh Router / 1v1 Striker Oracle
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V162)
+# 40-Core EPYC / Direct Mesh Router / Anti-Camper Predator Overhaul
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -21,6 +21,7 @@ import traceback
 import json
 import shutil
 import logging
+import collections
 from typing import Any
 import multiprocessing as mp
 
@@ -86,15 +87,10 @@ def cleanup_trackers():
     except: pass
 
 # ------------------------------------------------------------------------------
-# 1. COLLISION MESH DIRECT ROUTER & DOMAIN RANDOMIZATION
+# 1. COLLISION MESH DIRECT ROUTER
 # ------------------------------------------------------------------------------
 def ensure_collision_meshes():
-    """
-    🛑 DIRECT ROUTER: Auto-detects Colab paths and routes to CWD.
-    """
     target_dir = os.path.join(os.getcwd(), "collision_meshes")
-    
-    # Look across all likely Colab paths
     possible_sources = ["/content/RL_CollisionMeshes/collision_meshes", "/content/RL_CollisionMeshes", "/content/collision_meshes"]
     source_dir = None
     for p in possible_sources:
@@ -103,7 +99,6 @@ def ensure_collision_meshes():
             break
             
     if source_dir is None:
-        print("⚠️ WARNING: Collision mesh source directory not found! RocketSim might crash.")
         return
 
     if os.path.abspath(source_dir) == os.path.abspath(target_dir):
@@ -114,7 +109,7 @@ def ensure_collision_meshes():
         if f.endswith(".cmf"):
             try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
             except Exception: pass
-    print(f"✅ Successfully routed perfectly formatted collision meshes from {source_dir} to {target_dir}")
+    print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
@@ -416,6 +411,29 @@ class TrackedCombinedReward(RewardFunction):
                 
         return float(total_reward)
 
+class FaceAndChaseReward(RewardFunction):
+    """🧠 REWARD HACK FIX: The AI ONLY gets alignment points if it is driving FORWARD."""
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        bx, by, bz = state.ball.position
+        px, py, pz = player.car_data.position
+        
+        dx, dy, dz = bx - px, by - py, bz - pz
+        dist = math.sqrt(dx**2 + dy**2 + dz**2)
+        
+        if dist > 0:
+            fx, fy, fz = player.car_data.forward()
+            align = (dx*fx + dy*fy + dz*fz) / dist
+            
+            vx, vy, vz = player.car_data.linear_velocity
+            vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist
+            
+            # The secret sauce: Multiply alignment by velocity. 
+            # If it's standing still, vel_to_ball = 0, so Reward = 0.0
+            if align > 0.0 and vel_to_ball > 0.0:
+                return float(align * (vel_to_ball * INV_2300))
+        return 0.0
+
 class OffensivePushReward(RewardFunction):
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
@@ -498,63 +516,6 @@ class DynamicBoostReward(RewardFunction):
         self.last_boost[player.car_id] = current_boost
         return float(rew * 0.05)
 
-class KinestheticShadowDefense(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        cx, cy, cz = player.car_data.position
-        bx, by, bz = state.ball.position
-        
-        gy = -5120.0 if player.team_num == 0 else 5120.0
-        b2gx, b2gy, b2gz = -bx, gy-by, -bz
-        c2gx, c2gy, c2gz = -cx, gy-cy, -cz
-        
-        b2g_n = math.sqrt(b2gx**2 + b2gy**2 + b2gz**2)
-        c2g_n = math.sqrt(c2gx**2 + c2gy**2 + c2gz**2)
-        
-        out_of_position = c2g_n > b2g_n
-
-        if out_of_position:
-            vx, vy, vz = player.car_data.linear_velocity
-            if c2g_n > 0:
-                vel_to_goal = (vx*c2gx + vy*c2gy + vz*c2gz) / c2g_n
-                return float(max(0.0, vel_to_goal * INV_2300) * 0.1) 
-            return 0.0
-
-        dist = math.sqrt((cx-bx)**2 + (cy-by)**2 + (cz-bz)**2)
-        dist_factor = math.exp(-dist * INV_3000)
-        
-        align = 0.0
-        if b2g_n > 0 and c2g_n > 0: 
-            align = (b2gx*c2gx + b2gy*c2gy + b2gz*c2gz) / (b2g_n * c2g_n)
-
-        bvx, bvy, bvz = state.ball.linear_velocity
-        pvx, pvy, pvz = player.car_data.linear_velocity
-        bv_n = math.sqrt(bvx**2 + bvy**2 + bvz**2)
-        pv_n = math.sqrt(pvx**2 + pvy**2 + pvz**2)
-        
-        v_match = 0.0
-        if bv_n > 0 and pv_n > 0: 
-            v_match = (bvx*pvx + bvy*pvy + bvz*pvz) / (bv_n * pv_n)
-        
-        v_mult = 1.0 + (v_match * 0.5) 
-        
-        return float(dist_factor * max(0.0, align) * v_mult)
-
-class AlignToBallReward(RewardFunction):
-    """🧠 NEW: Forces the AI to aggressively point its nose at the ball"""
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        bx, by, bz = state.ball.position
-        px, py, pz = player.car_data.position
-        
-        c2bx, c2by, c2bz = bx - px, by - py, bz - pz
-        c2b_mag = math.sqrt(c2bx**2 + c2by**2 + c2bz**2)
-        
-        if c2b_mag > 0:
-            fx, fy, fz = player.car_data.forward()
-            align = (c2bx*fx + c2by*fy + c2bz*fz) / c2b_mag
-            return float(max(0.0, align))
-        return 0.0
 
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS
@@ -634,22 +595,24 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # 🛑 CRITICAL FIX: REWARD WEIGHTS BOOSTED FOR MAX AGGRESSION 🛑
-    # Heavily increased VelocityPlayerToBall (0.15) & Event Touch/Shot to force chasing and scoring.
+    # 🛑 THE "PREDATOR" CONFIGURATION (Curing the Turret Exploit) 🛑
+    # 1. Shadow Defense has been deleted completely (no more retreating/camping).
+    # 2. PlayerToBall has a massive weight of 0.40 (force max speed forward driving).
+    # 3. FaceAndChase replaces the old alignment (cannot earn points while standing still).
+    # 4. Concede penalty lowered to -5.0 so it isn't afraid to miss an aerial block.
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=25.0, concede=-20.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
+            EventReward(goal=15.0, concede=-5.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
             VelocityBallToGoalReward(),            
             OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
-            AlignToBallReward(), # Forces agent to face ball directly      
+            FaceAndChaseReward(),    
             CompoundAerialReward(),       
-            KinestheticShadowDefense(),
             RecoveryReward(),
             DynamicBoostReward()
         ),
-        (1.0, 0.20, 0.08, 0.15, 0.08, 0.12, 0.02, 0.05, 0.05),
-        names=["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "AlignToBall", "Aerial", "ShadowDef", "Recovery", "Boost"]
+        (1.0, 0.20, 0.10, 0.40, 0.25, 0.15, 0.05, 0.05),
+        names=["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "FaceAndChase", "Aerial", "Recovery", "Boost"]
     )
     
     action_parser = SOTAActionParser()
@@ -661,14 +624,15 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(225)]
+        # 🛑 Reduced NoTouchTimeout to 150 (approx 10 secs) to force faster plays
+        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V161 MAIN PPO ENGINE
+# 7. SOTA V162 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -679,7 +643,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V161)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V162)...")
     
     try:
         temp_env = build_env()
@@ -727,6 +691,9 @@ if __name__ == "__main__":
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
     )
+
+    # 🛑 THE FIX FOR THE [] BUG: Rolling Queue to remember episode completions
+    ep_returns_queue = collections.deque(maxlen=100)
 
     # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
@@ -827,7 +794,6 @@ if __name__ == "__main__":
             
             torch.set_num_threads(WORKER_CORES) 
             
-            # 🛑 METRICS FIX: Dynamically capture the learning report dictionary so we can extract exact NA losses
             learn_report = learner.ppo_learner.learn(learner.experience_buffer)
             if not isinstance(learn_report, dict): 
                 learn_report = getattr(learner.ppo_learner, 'report', {})
@@ -852,32 +818,43 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
             
+            # 🛑 METRICS FIX: Extract and append recent returns to smooth out [] lists
+            if isinstance(metrics, dict):
+                for k in ['Episode Returns', 'Cumulative Reward', 'Average Reward', 'Episode Return', 'Reward']:
+                    if k in metrics:
+                        val = metrics[k]
+                        if isinstance(val, (list, tuple, np.ndarray)):
+                            ep_returns_queue.extend(val)
+                        elif isinstance(val, (float, int)):
+                            ep_returns_queue.append(val)
+                        break
+            elif isinstance(metrics, (list, tuple, np.ndarray)):
+                ep_returns_queue.extend(metrics)
+
             if (i + 1) > start_iter and (i + 1) % 50 == 0:
                 print("\n" + "═"*60)
                 print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
                 
-                # 🛑 FIX FOR NA: Safely scan the dynamic metrics dictionary to find true Average Reward
-                avg_reward = "N/A"
-                if isinstance(metrics, dict):
-                    keys_to_check = ['Cumulative Reward', 'Average Reward', 'Episode Return', 'Reward', 'Episode Returns']
-                    for k in keys_to_check:
-                        if k in metrics:
-                            val = metrics[k]
-                            if isinstance(val, (list, tuple)) and len(val) > 0: avg_reward = sum(val) / len(val)
-                            elif isinstance(val, (float, int)): avg_reward = val
-                            break
-                elif isinstance(metrics, (list, tuple)) and len(metrics) > 0:
-                    avg_reward = sum(metrics) / len(metrics)
-                    
-                if isinstance(avg_reward, float):
-                    avg_reward = round(avg_reward, 3)
+                # Retrieve from the rolling queue we just built
+                if len(ep_returns_queue) > 0:
+                    avg_reward = round(sum(ep_returns_queue) / len(ep_returns_queue), 3)
+                else:
+                    avg_reward = "N/A (Awaiting Eps)"
 
                 print(f"PPO Avg Reward/Ep:    {avg_reward}")
                 
-                # 🛑 FIX FOR NA: Safely parse the exact loss values out of the captured learn_report
-                p_loss = learn_report.get('Policy Loss', getattr(learner.ppo_learner, 'policy_loss', 'N/A'))
-                v_loss = learn_report.get('Value Function Loss', learn_report.get('Value Loss', getattr(learner.ppo_learner, 'value_loss', 'N/A')))
-                ent = learn_report.get('Entropy', getattr(learner.ppo_learner, 'entropy', 'N/A'))
+                # 🛑 FOOLPROOF LOSS PARSER: Search internal dict by string parts
+                p_loss, v_loss, ent = "N/A", "N/A", "N/A"
+                if isinstance(learn_report, dict):
+                    for k, v in learn_report.items():
+                        kl = k.lower()
+                        if 'policy' in kl and 'loss' in kl: p_loss = v
+                        elif 'value' in kl and 'loss' in kl: v_loss = v
+                        elif 'entropy' in kl or 'ent' in kl: ent = v
+                        
+                if p_loss == "N/A": p_loss = getattr(learner.ppo_learner, 'policy_loss', getattr(learner.ppo_learner, '_policy_loss', 'N/A'))
+                if v_loss == "N/A": v_loss = getattr(learner.ppo_learner, 'value_loss', getattr(learner.ppo_learner, '_value_loss', 'N/A'))
+                if ent == "N/A": ent = getattr(learner.ppo_learner, 'entropy', getattr(learner.ppo_learner, '_entropy', 'N/A'))
                 
                 if isinstance(p_loss, torch.Tensor): p_loss = p_loss.item()
                 if isinstance(v_loss, torch.Tensor): v_loss = v_loss.item()
@@ -919,7 +896,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V161_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V162_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -944,10 +921,9 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V161_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V162_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
-                    # 🚀 CRITICAL FIX DEPLOYED: Correctly extracts the neural net to prevent Categorical.sample() lobotomies
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
                     torch.onnx.export(
@@ -980,8 +956,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V161_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V161_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V162_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V162_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
