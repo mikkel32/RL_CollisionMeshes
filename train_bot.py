@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V200)
-# 40-Core EPYC / Lightning Fast 1v1 Matrix / Action Pruning / Direct Mesh Router
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V201)
+# 40-Core EPYC / Lightning Fast 1v1 Matrix / Action Pruning / NameError Fixed
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -85,10 +85,6 @@ def cleanup_trackers():
 # 1. COLLISION MESH DIRECT ROUTER & DOMAIN RANDOMIZATION
 # ------------------------------------------------------------------------------
 def ensure_collision_meshes():
-    """
-    🛑 DIRECT ROUTER: Directly grabs your perfect files from /content/collision_meshes
-    and drops them into the worker's Local Directory so RocketSim boots flawlessly.
-    """
     target_dir = os.path.join(os.getcwd(), "collision_meshes")
     source_dir = "/content/collision_meshes"
     
@@ -102,7 +98,7 @@ def ensure_collision_meshes():
                 try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
                 except Exception: pass
     else:
-        print(f"⚠️ WARNING: {source_dir} not found! RocketSim might crash if meshes aren't local.")
+        pass
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
@@ -204,7 +200,6 @@ class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
-        # 🛑 SPEED FIX: Ghost variables stripped. Tensor shrinks from 156 -> 92!
         self.MAX_OPPONENTS = 1
         self.MAX_TEAMMATES = 0
 
@@ -434,21 +429,21 @@ class CompoundAerialReward(RewardFunction):
         self.air_ticks.clear()
     
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        # 🛑 ANTI-WALL RIDE: Wheels touching any surface resets air time to 0!
         if player.on_ground:
             self.air_ticks[player.car_id] = 0
             return 0.0 
         
         self.air_ticks[player.car_id] = self.air_ticks.get(player.car_id, 0) + 1
         
-        pz = player.car_data.position[2]
+        # 🛑 FIX APPLIED: We must unpack px, py, and pz so NameError is impossible!
+        px, py, pz = player.car_data.position
+        
         if pz < 100.0 or state.ball.position[2] < 250.0:
             return 0.0 
             
         air_time_frac = min(self.air_ticks[player.car_id] / (15.0 * 1.75), 1.0)
         height_frac = min(max(pz - 100.0, 0.0) * INV_2044, 1.0) 
         
-        # 🛑 MATHEMATICAL EXPLOIT CURE: Driving up a wall gives 0.0 air_time, negating the height bonus!
         flight_multiplier = min(air_time_frac, height_frac)
         
         if flight_multiplier <= 0:
@@ -618,8 +613,6 @@ class EscalateMutator(StateSetter):
 # 6. ENVIRONMENT GENERATION
 # ------------------------------------------------------------------------------
 def build_env():
-    # 🛑 THE FIX: We must run the mesh router inside build_env() so every single 
-    # isolated PyTorch worker forcefully grabs the C++ files before booting!
     ensure_collision_meshes()
     
     seed = int.from_bytes(os.urandom(4), byteorder="little")
@@ -656,7 +649,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V200 MAIN PPO ENGINE
+# 7. SOTA V201 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -666,7 +659,7 @@ if __name__ == "__main__":
         
     cleanup_trackers()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V200 HARD RESET)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V201)...")
     
     try:
         temp_env = build_env()
@@ -708,7 +701,6 @@ if __name__ == "__main__":
         
         ppo_epochs=4, 
         
-        # 🛑 SPEED FIX: 1v1 doesn't need 512 width! Slashing layers increases VRAM speed 400%
         policy_layer_sizes=(256, 256, 256),               
         critic_layer_sizes=(256, 256, 256),      
         
@@ -716,11 +708,7 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
-    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
-    
-    # 🚨 FOLDER REROUTED: Safely isolates the 1v1 matrix so it doesn't crash 
-    # trying to load your massive 3v3 [156x512] Neural Network into this [92x256] architecture.
     ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints_V200"
     
     if os.path.exists(ckpt_dir):
@@ -729,7 +717,7 @@ if __name__ == "__main__":
         all_files_and_dirs = os.listdir(ckpt_dir)
         valid_iters = []
         for f in all_files_and_dirs:
-            match = re.search(r'(?:ckpt_V2\d{2}_|raw_policy_weights_V200_)(\d+)', f)
+            match = re.search(r'(?:ckpt_V2\d{2}_|raw_policy_weights_V2\d{2}_)(\d+)', f)
             if match:
                 valid_iters.append(int(match.group(1)))
 
@@ -741,7 +729,7 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V200_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V201_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -808,7 +796,7 @@ if __name__ == "__main__":
                 start_iter = 0
                 TOTAL_ITERS = BASE_ITERS
     else:
-        print("\n✨ Starting Fresh V200 Fast-Matrix Training Run! (3v3 Checkpoints safely bypassed)")
+        print("\n✨ Starting Fresh V201 Fast-Matrix Training Run! (3v3 Checkpoints safely bypassed)")
 
     try:
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
@@ -889,7 +877,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V200_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V201_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -911,10 +899,10 @@ if __name__ == "__main__":
                     except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
                     device_net = next(policy_net.parameters()).device
                     
-                    fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_V200_{i+1}.pt")    
+                    fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_V201_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V200_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V201_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -949,8 +937,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V200_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V200_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V201_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V201_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
