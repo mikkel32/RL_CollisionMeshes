@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V165)
-# 40-Core EPYC / ONNX Logit-Lock Fixed / 1v1 Striker Oracle
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V160)
+# 40-Core EPYC / Collision Mesh Auto-Router / 1v1 Striker Oracle
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -83,8 +83,48 @@ def cleanup_trackers():
     except: pass
 
 # ------------------------------------------------------------------------------
-# 1. DOMAIN RANDOMIZATION WRAPPERS (Sim-to-Real Protection)
+# 1. COLLISION MESH AUTO-FIXER & DOMAIN RANDOMIZATION
 # ------------------------------------------------------------------------------
+def ensure_collision_meshes():
+    """
+    🛑 CRASH CURE: RocketSim strictly demands meshes be inside "./collision_meshes/". 
+    This automatically finds your loose .cmf files, creates the folder, copies them in, 
+    and perfectly fixes any leading-zero naming bugs.
+    """
+    target_dir = os.path.join(os.getcwd(), "collision_meshes")
+    os.makedirs(target_dir, exist_ok=True)
+    
+    search_dirs = [
+        os.getcwd(),
+        "/content/RL_CollisionMeshes",
+        "/content"
+    ]
+    try:
+        rlgym_sim_dir = os.path.dirname(rlgym_sim.__file__)
+        search_dirs.append(os.path.join(rlgym_sim_dir, "simulator", "collision_meshes"))
+        search_dirs.append(os.path.join(rlgym_sim_dir, "collision_meshes"))
+    except:
+        pass
+        
+    for d in search_dirs:
+        if not os.path.exists(d): continue
+        for root, _, files in os.walk(d):
+            # Prevent recursive loop into itself
+            if os.path.abspath(root) == os.path.abspath(target_dir):
+                continue
+            for f in files:
+                if f.endswith(".cmf"):
+                    src = os.path.join(root, f)
+                    
+                    # Fixes the 'mesh_01' to 'mesh_1' naming bug on the fly
+                    match = re.match(r"^mesh_0(\d)\.cmf$", f)
+                    clean_name = f"mesh_{match.group(1)}.cmf" if match else f
+                    dst = os.path.join(target_dir, clean_name)
+                    
+                    if not os.path.exists(dst):
+                        try: shutil.copy(src, dst)
+                        except: pass
+
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
         super().__init__(env)
@@ -130,24 +170,9 @@ class PhysicsRandomizationMutator(StateSetter):
                 vel[2] * random.uniform(0.98, 1.02) + random.uniform(-10.0, 10.0)
             )
 
-def revert_collision_meshes():
-    search_dirs = [".", "collision_meshes", "/content/RL_CollisionMeshes"]
-    try: search_dirs.append(os.path.dirname(rlgym_sim.__file__))
-    except NameError: pass
-    for d in search_dirs:
-        if not os.path.exists(d): continue
-        for root, _, files in os.walk(d):
-            for filename in files:
-                match = re.match(r"^mesh_0(\d)\.cmf$", filename)
-                if match:
-                    try: os.rename(os.path.join(root, filename), os.path.join(root, f"mesh_{match.group(1)}.cmf"))
-                    except OSError: pass
-
-# 🚀 CRITICAL FIX: Explicitly target policy_net so we export 648 logits, not a sampled integer!
 class RLBotONNXWrapper(torch.nn.Module):
     def __init__(self, policy):
         super().__init__()
-        # rlgym-ppo DiscretePolicy stores the actual neural net as 'policy_net'
         if hasattr(policy, "policy_net"):
             self.net = policy.policy_net
         elif hasattr(policy, "model"):
@@ -157,7 +182,6 @@ class RLBotONNXWrapper(torch.nn.Module):
 
     def forward(self, x):
         out = self.net(x)
-        # Failsafe if the model somehow still returns a tuple (action, log_prob)
         if isinstance(out, tuple):
             return out[0]
         return out
@@ -430,6 +454,7 @@ class CompoundAerialReward(RewardFunction):
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         px, py, pz = player.car_data.position
         
+        # 🛑 Aerial Phobia threshold correctly flattened
         if player.on_ground or pz < 100.0 or state.ball.position[2] < 250.0:
             return 0.0 
         
@@ -603,9 +628,10 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 SOTA FIX: Normalized Goal Reward + Massive Aggressive Weight Multipliers!
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=15.0, concede=-15.0, shot=2.0, save=4.0, demo=1.5, touch=0.2), 
+            EventReward(goal=100.0, concede=-100.0, shot=20.0, save=15.0, demo=10.0, touch=1.0), 
             VelocityBallToGoalReward(),            
             OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
@@ -614,7 +640,7 @@ def build_env():
             RecoveryReward(),
             DynamicBoostReward()
         ),
-        (1.0, 0.15, 0.08, 0.06, 0.12, 0.02, 0.05, 0.05)    
+        (1.0, 0.5, 0.2, 0.1, 0.15, 0.02, 0.05, 0.05)    
     )
     
     action_parser = SOTAActionParser()
@@ -633,7 +659,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V165 MAIN PPO ENGINE
+# 7. SOTA V160 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -642,9 +668,9 @@ if __name__ == "__main__":
         pass
         
     cleanup_trackers()
-    revert_collision_meshes()
+    ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V165 LOBOTOMY CURE)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V160)...")
     
     try:
         temp_env = build_env()
@@ -661,6 +687,7 @@ if __name__ == "__main__":
 
     WORKER_CORES = min(60, mp.cpu_count()) 
     
+    # 🛑 SOTA FIX: PPO Equilibrium. 3x Buffer properly scales 20 granular gradient steps per epoch!
     GLOBAL_BATCH_SIZE = 100_000 
     EXP_BUFFER = 300_000 
     MINI_BATCH = 20_000 
@@ -715,7 +742,7 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(165, 20, -1)] + [f"ckpt_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(175, 20, -1)] + [f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
@@ -861,7 +888,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V165_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V160_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -886,7 +913,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V165_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V160_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     # 🚀 CRITICAL FIX DEPLOYED: Correctly extracts the neural net to prevent Categorical.sample() lobotomies
@@ -899,7 +926,7 @@ if __name__ == "__main__":
                         dynamic_axes={'observation': {0: 'batch_size'}, 'action_logits': {0: 'batch_size'}}
                     )
                     policy_net.train() 
-                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Cured 648-Logit model saved to Drive.")
+                    print(f"   ✅ ONNX HOT-SWAP EXPORT: Dynamic-Batched model saved to Drive.")
                 except Exception as e_pt:
                     print(f"   ❌ FATAL: Override Backup Failed: {e_pt}")
 
@@ -922,8 +949,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V165_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V165_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V160_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V160_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
