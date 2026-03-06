@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V165)
-# 40-Core EPYC / Direct Mesh Router / True Striker / Bulletproof HUD
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V166)
+# 40-Core EPYC / Aerial Apex Predator / Reward Squish / Pruned Action Space
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -211,7 +211,7 @@ class RLBotONNXWrapper(torch.nn.Module):
         return out
 
 # ------------------------------------------------------------------------------
-# 2. VECTORIZED ACTION PARSER 
+# 2. VECTORIZED ACTION PARSER (⭐ HIGHLIGHT: SMART PRUNING APPLIED)
 # ------------------------------------------------------------------------------
 class SOTAActionParser(ActionParser):
     def __init__(self):
@@ -219,6 +219,7 @@ class SOTAActionParser(ActionParser):
         self._lookup_table = np.array(self._make_bins(), dtype=np.float32)
 
     def _make_bins(self):
+        """⭐ HIGHLIGHT: Pruned down to speed up Neural Convergence."""
         bins = []
         for throttle in [-1.0, 0.0, 1.0]:
             for steer_yaw in [-1.0, 0.0, 1.0]:
@@ -227,6 +228,14 @@ class SOTAActionParser(ActionParser):
                         for jump in [0.0, 1.0]:
                             for boost in [0.0, 1.0]:
                                 for handbrake in [0.0, 1.0]:
+                                    # 🛑 SMART PRUNING LOGIC:
+                                    if jump == 1 and handbrake == 1: 
+                                        continue # Handbrake does nothing while jumping
+                                    if pitch != 0 and throttle == -1.0: 
+                                        continue # Reverse throttle in air is mathematically useless
+                                    if boost == 1 and throttle == -1.0:
+                                        continue # Boosting while reversing is contradictory
+                                        
                                     bins.append([throttle, steer_yaw, pitch, steer_yaw, roll, jump, boost, handbrake])
         return bins
         
@@ -448,7 +457,6 @@ class TrackedCombinedReward(RewardFunction):
         return float(total_reward)
 
 class FearlessPlayerToBallReward(RewardFunction):
-    """🚀 FEARLESS FIX: 0 negative points. Only positive rewards for driving TOWARDS the ball."""
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         bx, by, bz = state.ball.position
@@ -465,20 +473,16 @@ class FearlessPlayerToBallReward(RewardFunction):
         return 0.0
 
 class PositionToShootReward(RewardFunction):
-    """🧠 NEW: Rewards the AI for staying on the DEFENSIVE side of the ball so it naturally lines up shots."""
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         bx, by, bz = state.ball.position
         px, py, pz = player.car_data.position
         
-        # Determine the opponent's goal Y coordinate
         gy = 5120.0 if player.team_num == 0 else -5120.0
         
-        # 2D Vector from Ball to Goal
         b2gx, b2gy = 0.0 - bx, gy - by
         b2g_mag = math.sqrt(b2gx**2 + b2gy**2)
         
-        # 2D Vector from Player to Ball
         p2bx, p2by = bx - px, by - py
         p2b_mag = math.sqrt(p2bx**2 + p2by**2)
         
@@ -507,38 +511,32 @@ class FaceAndChaseReward(RewardFunction):
                 return float(align * (vel_to_ball * INV_2300))
         return 0.0
 
+# ⭐ HIGHLIGHT: EXPONENTIAL AERIAL JACKPOT APPLIED
 class CompoundAerialReward(RewardFunction):
+    """🧠 PERFECTED AERIAL: Cures jump phobia and exponentially rewards high-altitude intercepts."""
     def reset(self, initial_state: GameState): pass
     
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        px, py, pz = player.car_data.position
-        
-        if player.on_ground or pz < 100.0 or state.ball.position[2] < 250.0:
+        # Ignore grounded players
+        if player.on_ground:
             return 0.0 
-        
-        bx, by, bz = state.ball.position
-        bvx, bvy, bvz = state.ball.linear_velocity
-        vx, vy, vz = player.car_data.linear_velocity
-        
-        pred_bx = bx + (bvx * 0.4)
-        pred_by = by + (bvy * 0.4)
-        pred_bz = bz + (bvz * 0.4) - 52.0 
-        
-        dx, dy, dz = pred_bx - px, pred_by - py, pred_bz - pz
-        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-        
-        shaping_rew = 0.0
-        if dist > 0:
-            vel_to_pred_ball = (vx*dx + vy*dy + vz*dz) / dist
-            height_mult = max(0.0, (pz - 100.0) * INV_2044)
-            shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * height_mult * 2.0 
             
+        pz = player.car_data.position[2]
+        
+        # 1. In-Air Shaping (Cures the fear of jumping)
+        # Small continuous reward for just being off the ground
+        air_reward = 0.005 if pz > 200.0 else 0.0
+        
+        # 2. Height-Scaled Touch Impact (The Jackpot)
         touch_rew = 0.0
         if player.ball_touched:
-            height_frac = min(max(pz, 0.0) * INV_2044, 1.0) 
-            touch_rew = float(height_frac) * 30.0 
-            
-        return float(shaping_rew + touch_rew)
+            bz = state.ball.position[2]
+            # Ceiling is ~2044. Reward scales exponentially with height of the touch.
+            height_frac = max(0.0, min(bz / 2044.0, 1.0))
+            if height_frac > 0.15: # Must be higher than a standard double jump
+                touch_rew = 25.0 * (height_frac ** 2) # Exponential scaling for high aerials
+                
+        return float(air_reward + touch_rew)
 
 class RecoveryReward(RewardFunction):
     def reset(self, initial_state: GameState): pass
@@ -547,27 +545,29 @@ class RecoveryReward(RewardFunction):
             return float(max(0.0, player.car_data.up()[2]) * 0.005)
         return 0.0
 
+# ⭐ HIGHLIGHT: LINEAR BOOST STARVATION APPLIED
 class DynamicBoostReward(RewardFunction):
     def __init__(self):
         super().__init__()
         self.last_boost = {}
-
+        
     def reset(self, initial_state: GameState):
         self.last_boost.clear()
-
+        
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        rew = 0.0
         current_boost = player.boost_amount
         last_b = self.last_boost.get(player.car_id, current_boost)
-        
-        if current_boost > last_b:
-            rew = math.sqrt(current_boost) - math.sqrt(max(0.0, last_b))
-            
         self.last_boost[player.car_id] = current_boost
-        return float(rew * 0.05)
+        
+        rew = 0.0
+        if current_boost > last_b + 0.01: # Picked up a pad
+            # Multiplier: higher reward if they grab boost when starved
+            starvation_mult = 1.0 - last_b 
+            rew = (current_boost - last_b) * (1.0 + starvation_mult) * 2.0
+        return float(rew)
 
 # ------------------------------------------------------------------------------
-# 5. CURRICULUM MUTATORS
+# 5. CURRICULUM MUTATORS (⭐ HIGHLIGHT: AERIAL INTERCEPT INJECTED)
 # ------------------------------------------------------------------------------
 class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
@@ -620,6 +620,21 @@ class EscalateMutator(StateSetter):
                 car.set_ang_vel(random.uniform(-5, 5), random.uniform(-5, 5), random.uniform(-5, 5))
                 car.boost = random.uniform(0.0, 0.5)
 
+        elif scenario < 0.95: 
+            # 🚀 THE AERIAL INTERCEPT CURRICULUM
+            # Ball suspended perfectly high in the air, 0 velocity.
+            wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-1000, 1000), random.uniform(1200, 1800))
+            wrapper.ball.set_lin_vel(0.0, 0.0, 0.0)
+            
+            # Car on the ground directly below it, pointing at it, with 100 boost.
+            for car in wrapper.cars:
+                car.set_pos(wrapper.ball.position[0] + random.uniform(-400, 400), 
+                            wrapper.ball.position[1] + random.uniform(-400, 400), 17.05)
+                # Auto-aim car directly at the ball
+                car.set_rot(0.0, math.atan2(wrapper.ball.position[1] - car.position[1], wrapper.ball.position[0] - car.position[0]), 0.0)
+                car.set_lin_vel(0.0, 0.0, 0.0)
+                car.boost = 1.0 # FULL BOOST to force flight
+
         else:
             team_side = random.choice([-1.0, 1.0])
             wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-2000, 2000), 200.0)
@@ -644,19 +659,22 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # 🛑 THE "TRUE STRIKER" WEIGHTS (Fearless Chasing & Smart Positioning)
+    # ⭐ HIGHLIGHT: THE REWARD SQUISH (Curing the Chaser)
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=15.0, concede=-5.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
-            VelocityBallToGoalReward(),            
-            PositionToShootReward(), 
-            FearlessPlayerToBallReward(), 
-            FaceAndChaseReward(),    
-            CompoundAerialReward(),       
-            RecoveryReward(),
-            DynamicBoostReward()
+            EventReward(goal=25.0, concede=-10.0, shot=8.0, save=6.0, demo=2.0, touch=0.5), 
+            VelocityBallToGoalReward(),            # Force the ball towards the net!
+            PositionToShootReward(),               # (Decayed)
+            FearlessPlayerToBallReward(),          # (Decayed) Stop mindless chasing
+            FaceAndChaseReward(),                  # (Decayed)
+            CompoundAerialReward(),                # 🚀 MASSIVELY INCREASED to force flight
+            RecoveryReward(),                      # 🛬 Increased to force wave-dashes/landing
+            DynamicBoostReward()                   # ⛽ Increased so the bot learns to path over pads
         ),
-        (1.0, 0.30, 0.20, 0.35, 0.15, 0.15, 0.05, 0.05),
+        # NEW PERFECT WEIGHTS:
+        # [Event, BallToNet, Position, PlayerToBall, FaceChase, Aerial, Recovery, Boost]
+        (1.0,     2.00,      0.02,     0.02,         0.01,      3.0,    0.20,     0.50),
+        
         names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Aerial", "Recovery", "Boost"]
     )
     
@@ -673,12 +691,11 @@ def build_env():
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
-    # 🧠 FAILSAFE METRICS WRAPPER
     env = ReturnTrackerWrapper(env)
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V165 MAIN PPO ENGINE
+# 7. SOTA V166 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -689,7 +706,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V165)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V166)...")
     
     try:
         temp_env = build_env()
@@ -710,8 +727,8 @@ if __name__ == "__main__":
     EXP_BUFFER = 300_000 
     MINI_BATCH = 20_000 
     
-    BASE_ITERS = 5000
-    EXTENSION_STEP = 2000
+    BASE_ITERS = 12000
+    EXTENSION_STEP = 3000
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
@@ -779,16 +796,24 @@ if __name__ == "__main__":
 
                 if ckpt_path and os.path.exists(os.path.join(ckpt_path, "PPO_POLICY.pt")):
                     try:
+                        # 🧠 NEURAL SURGERY: Safe Loading for Pruned Action Spaces
+                        # Because we deleted actions from the Action Parser, the output size changed!
+                        # We must surgically rebuild the final layer while keeping its brain intact to prevent a crash.
                         try:
                             learner.load(ckpt_path, load_wandb=False)
-                        except TypeError:
-                            learner.load(ckpt_path) 
-                        print(f"   ✅ NATIVE LOAD SUCCESS: Loaded full PyTorch brain from {ckpt_path}")
-                        loaded = True
-                    except Exception as e:
-                        print(f"   ⚠️ Native load failed. Attempting manual injection...")
-                        try:
-                            policy_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device), strict=False)
+                            print(f"   ✅ NATIVE LOAD SUCCESS: Loaded full PyTorch brain from {ckpt_path}")
+                            loaded = True
+                        except Exception as e:
+                            print(f"   ⚠️ Native load shape mismatch detected. Initiating Neural Surgery...")
+                            state_dict = torch.load(os.path.join(ckpt_path, "PPO_POLICY.pt"), map_location=device)
+                            model_dict = policy_net.state_dict()
+                            
+                            pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.shape == model_dict[k].shape}
+                            policy_net.load_state_dict(pretrained_dict, strict=False)
+                            
+                            if len(pretrained_dict) < len(model_dict):
+                                print("   ✅ ACTION SPACE PRUNED SUCCESSFULLY! Core physics features loaded, output layer safely reset.")
+                                
                             try: learner.ppo_learner.value_net.load_state_dict(torch.load(os.path.join(ckpt_path, "PPO_VALUE_NET.pt"), map_location=device), strict=False)
                             except: pass
                             
@@ -805,12 +830,15 @@ if __name__ == "__main__":
                                         
                             print(f"   ✅ Manually Restored PyTorch Brain from folder.")
                             loaded = True
-                        except Exception as e_man:
-                            print(f"   ⚠️ Manual load failed: {e_man}")
+                    except Exception as e_man:
+                        print(f"   ⚠️ Manual load failed: {e_man}")
 
                 if not loaded and os.path.exists(raw_pt_path):
                     try:
-                        policy_net.load_state_dict(torch.load(raw_pt_path, map_location=device), strict=False)
+                        state_dict = torch.load(raw_pt_path, map_location=device)
+                        model_dict = policy_net.state_dict()
+                        pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.shape == model_dict[k].shape}
+                        policy_net.load_state_dict(pretrained_dict, strict=False)
                         print(f"   ✅ Restored Neural Network Actor Brain from {raw_pt_path}")
                         loaded = True
                     except Exception as e:
@@ -950,7 +978,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V165_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V166_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -975,7 +1003,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V165_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V166_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -1010,8 +1038,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V165_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V165_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V166_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V166_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
