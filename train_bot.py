@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V201)
-# 40-Core EPYC / Lightning Fast 1v1 Matrix / Action Pruning / NameError Fixed
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V161)
+# 40-Core EPYC / Direct Mesh Router / 1v1 Striker Oracle
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -74,6 +74,7 @@ INV_100 = 1.0 / 100.0
 INV_50  = 1.0 / 50.0   
 
 def cleanup_trackers():
+    """Wipes old telemetry logic to prevent JSON bloating"""
     try:
         for f in os.listdir("/tmp"):
             if f.startswith('rlgym_reward_telemetry_') and f.endswith('.json'):
@@ -85,6 +86,10 @@ def cleanup_trackers():
 # 1. COLLISION MESH DIRECT ROUTER & DOMAIN RANDOMIZATION
 # ------------------------------------------------------------------------------
 def ensure_collision_meshes():
+    """
+    🛑 DIRECT ROUTER: Directly grabs your perfect files from /content/collision_meshes
+    and drops them into the Current Working Directory so RocketSim can see them instantly.
+    """
     target_dir = os.path.join(os.getcwd(), "collision_meshes")
     source_dir = "/content/collision_meshes"
     
@@ -97,8 +102,9 @@ def ensure_collision_meshes():
             if f.endswith(".cmf"):
                 try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
                 except Exception: pass
+        print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
     else:
-        pass
+        print(f"⚠️ WARNING: {source_dir} not found! RocketSim might crash if meshes aren't local.")
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
@@ -122,16 +128,19 @@ class ActionDelayWrapper(gym.Wrapper):
                 self.action_buffer.append(idle_arr)
 
         self.action_buffer.append(action_arr)
+        
         if len(self.action_buffer) > self.current_delay:
             delayed_action = self.action_buffer.pop(0)
         else:
             delayed_action = self.action_buffer[0] 
+            
         return self.env.step(delayed_action)
 
 class PhysicsRandomizationMutator(StateSetter):
     def __init__(self, base_mutator):
         super().__init__()
         self.base_mutator = base_mutator
+
     def reset(self, wrapper: StateWrapper):
         self.base_mutator.reset(wrapper)
         for car in wrapper.cars:
@@ -145,17 +154,21 @@ class PhysicsRandomizationMutator(StateSetter):
 class RLBotONNXWrapper(torch.nn.Module):
     def __init__(self, policy):
         super().__init__()
-        if hasattr(policy, "policy_net"): self.net = policy.policy_net
-        elif hasattr(policy, "model"): self.net = policy.model
-        else: self.net = policy
+        if hasattr(policy, "policy_net"):
+            self.net = policy.policy_net
+        elif hasattr(policy, "model"):
+            self.net = policy.model
+        else:
+            self.net = policy
 
     def forward(self, x):
         out = self.net(x)
-        if isinstance(out, tuple): return out[0]
+        if isinstance(out, tuple):
+            return out[0]
         return out
 
 # ------------------------------------------------------------------------------
-# 2. PRUNED ACTION PARSER (Massive Speed/IQ Boost)
+# 2. VECTORIZED ACTION PARSER (Masterclass 648-Bin Compression)
 # ------------------------------------------------------------------------------
 class SOTAActionParser(ActionParser):
     def __init__(self):
@@ -171,17 +184,13 @@ class SOTAActionParser(ActionParser):
                         for jump in [0.0, 1.0]:
                             for boost in [0.0, 1.0]:
                                 for handbrake in [0.0, 1.0]:
-                                    # 🛑 SOTA PRUNING RULES: Kills useless actions instantly!
-                                    if throttle == -1.0 and boost == 1.0: continue
-                                    if jump == 1.0 and handbrake == 1.0: continue
-                                    if pitch != 0.0 and steer_yaw != 0.0 and roll != 0.0: continue 
-                                    
                                     bins.append([throttle, steer_yaw, pitch, steer_yaw, roll, jump, boost, handbrake])
         return bins
         
     def get_idle_action_idx(self):
         for i, b in enumerate(self._lookup_table):
-            if np.all(b == 0.0): return i
+            if np.all(b == 0.0):
+                return i
         return 0
 
     def get_action_space(self) -> gym.spaces.Space:
@@ -194,14 +203,14 @@ class SOTAActionParser(ActionParser):
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. 1v1 OPTIMIZED OBSERVATION BUILDER (No Matrix Bloat)
+# 3. ULTRA-FAST OBSERVATION BUILDER (The Ghost Padding Matrix)
 # ------------------------------------------------------------------------------
 class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
-        self.MAX_OPPONENTS = 1
-        self.MAX_TEAMMATES = 0
+        self.MAX_OPPONENTS = 3
+        self.MAX_TEAMMATES = 2
 
     def reset(self, initial_state: GameState): 
         pass 
@@ -421,33 +430,13 @@ class OffensivePushReward(RewardFunction):
         return 0.0
 
 class CompoundAerialReward(RewardFunction):
-    def __init__(self):
-        super().__init__()
-        self.air_ticks = {} 
-
-    def reset(self, initial_state: GameState): 
-        self.air_ticks.clear()
+    def reset(self, initial_state: GameState): pass
     
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        if player.on_ground:
-            self.air_ticks[player.car_id] = 0
-            return 0.0 
-        
-        self.air_ticks[player.car_id] = self.air_ticks.get(player.car_id, 0) + 1
-        
-        # 🛑 FIX APPLIED: We must unpack px, py, and pz so NameError is impossible!
         px, py, pz = player.car_data.position
         
-        if pz < 100.0 or state.ball.position[2] < 250.0:
+        if player.on_ground or pz < 100.0 or state.ball.position[2] < 250.0:
             return 0.0 
-            
-        air_time_frac = min(self.air_ticks[player.car_id] / (15.0 * 1.75), 1.0)
-        height_frac = min(max(pz - 100.0, 0.0) * INV_2044, 1.0) 
-        
-        flight_multiplier = min(air_time_frac, height_frac)
-        
-        if flight_multiplier <= 0:
-            return 0.0
         
         bx, by, bz = state.ball.position
         bvx, bvy, bvz = state.ball.linear_velocity
@@ -463,11 +452,13 @@ class CompoundAerialReward(RewardFunction):
         shaping_rew = 0.0
         if dist > 0:
             vel_to_pred_ball = (vx*dx + vy*dy + vz*dz) / dist
-            shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * flight_multiplier * 2.0 
+            height_mult = max(0.0, (pz - 100.0) * INV_2044)
+            shaping_rew = max(0.0, vel_to_pred_ball * INV_2300) * height_mult * 2.0 
             
         touch_rew = 0.0
         if player.ball_touched:
-            touch_rew = float(flight_multiplier) * 20.0 
+            height_frac = min(max(pz, 0.0) * INV_2044, 1.0) 
+            touch_rew = float(height_frac) * 20.0 
             
         return float(shaping_rew + touch_rew)
 
@@ -613,15 +604,13 @@ class EscalateMutator(StateSetter):
 # 6. ENVIRONMENT GENERATION
 # ------------------------------------------------------------------------------
 def build_env():
-    ensure_collision_meshes()
-    
     seed = int.from_bytes(os.urandom(4), byteorder="little")
     random.seed(seed)
     np.random.seed(seed)
 
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=100.0, concede=-100.0, shot=20.0, save=15.0, demo=10.0, touch=1.0), 
+            EventReward(goal=15.0, concede=-15.0, shot=2.0, save=4.0, demo=1.5, touch=0.2), 
             VelocityBallToGoalReward(),            
             OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
@@ -630,7 +619,7 @@ def build_env():
             RecoveryReward(),
             DynamicBoostReward()
         ),
-        (1.0, 0.5, 0.2, 0.1, 0.15, 0.02, 0.05, 0.05)    
+        (1.0, 0.15, 0.08, 0.06, 0.12, 0.02, 0.05, 0.05)    
     )
     
     action_parser = SOTAActionParser()
@@ -649,7 +638,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V201 MAIN PPO ENGINE
+# 7. SOTA V161 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -658,8 +647,9 @@ if __name__ == "__main__":
         pass
         
     cleanup_trackers()
+    ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V201)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V161)...")
     
     try:
         temp_env = build_env()
@@ -669,7 +659,7 @@ if __name__ == "__main__":
         
         act_size = temp_env.action_space.n 
         temp_env.close()
-        print(f"✅ Domain Randomization Env Built! True 1v1 Obs Size: {obs_size} | Pruned Actions: {act_size}")
+        print(f"✅ Domain Randomization Env Built! True 1v1 Obs Size: {obs_size} | Optimized Actions: {act_size}")
     except Exception as e:
         print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
@@ -701,23 +691,24 @@ if __name__ == "__main__":
         
         ppo_epochs=4, 
         
-        policy_layer_sizes=(256, 256, 256),               
-        critic_layer_sizes=(256, 256, 256),      
+        policy_layer_sizes=(512, 512, 512),               
+        critic_layer_sizes=(512, 512, 512),      
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
     )
 
+    # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
-    ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints_V200"
+    ckpt_dir = "/content/drive/MyDrive/RocketLeagueModel/Checkpoints"
     
     if os.path.exists(ckpt_dir):
-        print(f"\n🔍 Scanning {ckpt_dir} for valid V200 saves...")
+        print(f"\n🔍 Scanning {ckpt_dir} for previous saves...")
         
         all_files_and_dirs = os.listdir(ckpt_dir)
         valid_iters = []
         for f in all_files_and_dirs:
-            match = re.search(r'(?:ckpt_V2\d{2}_|raw_policy_weights_V2\d{2}_)(\d+)', f)
+            match = re.search(r'(?:ckpt_V\d+_|ckpt_|raw_policy_weights_)(\d+)', f)
             if match:
                 valid_iters.append(int(match.group(1)))
 
@@ -729,14 +720,14 @@ if __name__ == "__main__":
                 TOTAL_ITERS += EXTENSION_STEP
                 print(f"📈 Cap Reached! Automatically extending training horizon to {TOTAL_ITERS} iterations.")
 
-            possible_ckpt_names = [f"ckpt_V201_{start_iter}"]
+            possible_ckpt_names = [f"ckpt_V{v}_{start_iter}" for v in range(175, 20, -1)] + [f"ckpt_{start_iter}"]
             ckpt_path = None
             for name in possible_ckpt_names:
                 if os.path.exists(os.path.join(ckpt_dir, name)):
                     ckpt_path = os.path.join(ckpt_dir, name)
                     break
                     
-            raw_pt_path = os.path.join(ckpt_dir, f"raw_policy_weights_V200_{start_iter}.pt")
+            raw_pt_path = os.path.join(ckpt_dir, f"raw_policy_weights_{start_iter}.pt")
             loaded = False
             
             try:
@@ -795,8 +786,6 @@ if __name__ == "__main__":
                 print(f"⚠️ Initialization error during restore: {e}")
                 start_iter = 0
                 TOTAL_ITERS = BASE_ITERS
-    else:
-        print("\n✨ Starting Fresh V201 Fast-Matrix Training Run! (3v3 Checkpoints safely bypassed)")
 
     try:
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
@@ -877,7 +866,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V201_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V161_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -899,12 +888,13 @@ if __name__ == "__main__":
                     except AttributeError: policy_net = getattr(learner, 'policy', getattr(learner, 'agent', learner)).actor
                     device_net = next(policy_net.parameters()).device
                     
-                    fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_V201_{i+1}.pt")    
+                    fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V201_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V161_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
+                    # 🚀 CRITICAL FIX DEPLOYED: Correctly extracts the neural net to prevent Categorical.sample() lobotomies
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
                     
                     torch.onnx.export(
@@ -937,8 +927,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V201_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V201_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V161_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V161_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
