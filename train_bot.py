@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V163)
-# 40-Core EPYC / Direct Mesh Router / Anti-Camper / Crash-Proof Metrics
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V165)
+# 40-Core EPYC / Direct Mesh Router / True Striker / Bulletproof HUD
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -54,7 +54,7 @@ from rlgym_sim.utils.state_setters import StateSetter, StateWrapper, DefaultStat
 from rlgym_ppo import Learner
 
 from rlgym_sim.utils.terminal_conditions.common_conditions import TimeoutCondition, GoalScoredCondition, NoTouchTimeoutCondition
-from rlgym_sim.utils.reward_functions.common_rewards import EventReward, VelocityBallToGoalReward, VelocityPlayerToBallReward
+from rlgym_sim.utils.reward_functions.common_rewards import EventReward, VelocityBallToGoalReward
 
 # Worker processes strictly locked to 1 thread for fast simulation
 torch.set_num_threads(1)
@@ -81,13 +81,13 @@ def cleanup_trackers():
     """Wipes old telemetry logic to prevent JSON bloating"""
     try:
         for f in os.listdir("/tmp"):
-            if f.startswith('rlgym_reward_telemetry_') and f.endswith('.json'):
+            if f.startswith('rlgym_reward_telemetry_') or f.startswith('rlgym_returns_'):
                 try: os.remove(os.path.join("/tmp", f))
                 except: pass
     except: pass
 
 # ------------------------------------------------------------------------------
-# 1. COLLISION MESH DIRECT ROUTER
+# 1. FAILSAFE WRAPPERS & MESH ROUTER
 # ------------------------------------------------------------------------------
 def ensure_collision_meshes():
     target_dir = os.path.join(os.getcwd(), "collision_meshes")
@@ -110,6 +110,44 @@ def ensure_collision_meshes():
             try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
             except Exception: pass
     print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
+
+class ReturnTrackerWrapper(gym.Wrapper):
+    """🧠 FAILSAFE: Intercepts raw rewards directly from the environment to prevent N/A metrics"""
+    def __init__(self, env):
+        super().__init__(env)
+        self.current_return = 0.0
+        self.pid = os.getpid()
+
+    def reset(self, **kwargs):
+        if self.current_return != 0.0:
+            try:
+                with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
+                    f.write(f"{self.current_return}\n")
+            except: pass
+        self.current_return = 0.0
+        return self.env.reset(**kwargs)
+
+    def step(self, action):
+        step_returns = self.env.step(action)
+        obs = step_returns[0]
+        reward = step_returns[1]
+        done = step_returns[2]
+        
+        if isinstance(reward, (list, tuple, np.ndarray)):
+            r_val = float(reward[0])
+        else:
+            r_val = float(reward)
+            
+        self.current_return += r_val
+        
+        if done:
+            try:
+                with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
+                    f.write(f"{self.current_return}\n")
+            except: pass
+            self.current_return = 0.0
+            
+        return step_returns
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
@@ -217,8 +255,7 @@ class TemporalMemoryObservation(ObsBuilder):
         self.MAX_OPPONENTS = 3
         self.MAX_TEAMMATES = 2
 
-    def reset(self, initial_state: GameState): 
-        pass 
+    def reset(self, initial_state: GameState): pass 
 
     def build_obs(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> np.ndarray:
         if player.team_num == 1: 
@@ -406,10 +443,49 @@ class TrackedCombinedReward(RewardFunction):
                     json.dump(avg_stats, f)
                 for k in self.names:
                     self.stats[k] = 0.0
-            except Exception: 
-                pass
+            except Exception: pass
                 
         return float(total_reward)
+
+class FearlessPlayerToBallReward(RewardFunction):
+    """🚀 FEARLESS FIX: 0 negative points. Only positive rewards for driving TOWARDS the ball."""
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        bx, by, bz = state.ball.position
+        px, py, pz = player.car_data.position
+        vx, vy, vz = player.car_data.linear_velocity
+        
+        dx, dy, dz = bx - px, by - py, bz - pz
+        dist = math.sqrt(dx**2 + dy**2 + dz**2)
+        
+        if dist > 0:
+            vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist
+            if vel_to_ball > 0:
+                return float(vel_to_ball * INV_2300)
+        return 0.0
+
+class PositionToShootReward(RewardFunction):
+    """🧠 NEW: Rewards the AI for staying on the DEFENSIVE side of the ball so it naturally lines up shots."""
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        bx, by, bz = state.ball.position
+        px, py, pz = player.car_data.position
+        
+        # Determine the opponent's goal Y coordinate
+        gy = 5120.0 if player.team_num == 0 else -5120.0
+        
+        # 2D Vector from Ball to Goal
+        b2gx, b2gy = 0.0 - bx, gy - by
+        b2g_mag = math.sqrt(b2gx**2 + b2gy**2)
+        
+        # 2D Vector from Player to Ball
+        p2bx, p2by = bx - px, by - py
+        p2b_mag = math.sqrt(p2bx**2 + p2by**2)
+        
+        if b2g_mag > 0 and p2b_mag > 0:
+            alignment = (p2bx*b2gx + p2by*b2gy) / (p2b_mag * b2g_mag)
+            return float(max(0.0, alignment))
+        return 0.0
 
 class FaceAndChaseReward(RewardFunction):
     def reset(self, initial_state: GameState): pass
@@ -429,29 +505,6 @@ class FaceAndChaseReward(RewardFunction):
             
             if align > 0.0 and vel_to_ball > 0.0:
                 return float(align * (vel_to_ball * INV_2300))
-        return 0.0
-
-class OffensivePushReward(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        bx, by, bz = state.ball.position
-        px, py, pz = player.car_data.position
-        
-        gy = 5120.0 if player.team_num == 0 else -5120.0
-        
-        c2bx, c2by, c2bz = bx - px, by - py, bz - pz
-        c2b_mag = math.sqrt(c2bx**2 + c2by**2 + c2bz**2)
-        
-        b2gx, b2gy, b2gz = 0.0 - bx, gy - by, 0.0 - bz
-        b2g_mag = math.sqrt(b2gx**2 + b2gy**2 + b2gz**2)
-        
-        if c2b_mag > 0 and b2g_mag > 0:
-            alignment = (c2bx*b2gx + c2by*b2gy + c2bz*b2gz) / (c2b_mag * b2g_mag)
-            if alignment > 0:
-                vx, vy, vz = player.car_data.linear_velocity
-                vel_to_ball = (vx*c2bx + vy*c2by + vz*c2bz) / c2b_mag
-                if vel_to_ball > 0:
-                    return float(alignment * (vel_to_ball * INV_2300))
         return 0.0
 
 class CompoundAerialReward(RewardFunction):
@@ -591,19 +644,20 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 THE "TRUE STRIKER" WEIGHTS (Fearless Chasing & Smart Positioning)
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=15.0, concede=-5.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
             VelocityBallToGoalReward(),            
-            OffensivePushReward(), 
-            VelocityPlayerToBallReward(), 
+            PositionToShootReward(), 
+            FearlessPlayerToBallReward(), 
             FaceAndChaseReward(),    
             CompoundAerialReward(),       
             RecoveryReward(),
             DynamicBoostReward()
         ),
-        (1.0, 0.20, 0.10, 0.40, 0.25, 0.15, 0.05, 0.05),
-        names=["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "FaceAndChase", "Aerial", "Recovery", "Boost"]
+        (1.0, 0.30, 0.20, 0.35, 0.15, 0.15, 0.05, 0.05),
+        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Aerial", "Recovery", "Boost"]
     )
     
     action_parser = SOTAActionParser()
@@ -619,10 +673,12 @@ def build_env():
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
+    # 🧠 FAILSAFE METRICS WRAPPER
+    env = ReturnTrackerWrapper(env)
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V163 MAIN PPO ENGINE
+# 7. SOTA V165 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -633,7 +689,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V163)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V165)...")
     
     try:
         temp_env = build_env()
@@ -682,7 +738,7 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
-    ep_returns_queue = collections.deque(maxlen=100)
+    ep_returns_queue = collections.deque(maxlen=200)
 
     # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
     start_iter = 0
@@ -807,31 +863,25 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
             
-            # 🛑 CRASH FIX: Extract metrics safely by flattening into pure Python floats
-            if isinstance(metrics, dict):
-                for k in ['Episode Returns', 'Cumulative Reward', 'Average Reward', 'Episode Return', 'Reward']:
-                    if k in metrics:
-                        try:
-                            val = metrics[k]
-                            if isinstance(val, torch.Tensor): val = val.detach().cpu().numpy()
-                            # Force flattening arrays of any depth into pure decimals
-                            for v in np.asarray(val).flatten():
-                                if not np.isnan(v): ep_returns_queue.append(float(v))
-                        except Exception: pass
-                        break
-            else:
-                try:
-                    val = metrics
-                    if isinstance(val, torch.Tensor): val = val.detach().cpu().numpy()
-                    for v in np.asarray(val).flatten():
-                        if not np.isnan(v): ep_returns_queue.append(float(v))
-                except Exception: pass
+            # 🛑 FAILSAFE METRIC EXTRACTOR: Read from temp files written natively by the wrapper
+            try:
+                return_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_returns_")]
+                for rf in return_files:
+                    try:
+                        with open(rf, "r") as f:
+                            lines = f.readlines()
+                            for line in lines:
+                                if line.strip():
+                                    ep_returns_queue.append(float(line.strip()))
+                        # Clear the file so it doesn't scale infinitely
+                        open(rf, 'w').close()
+                    except: pass
+            except: pass
 
             if (i + 1) > start_iter and (i + 1) % 50 == 0:
                 print("\n" + "═"*60)
                 print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
                 
-                # 🛑 SAFE MATH: float(np.mean()) prevents any array-based rounding panics
                 if len(ep_returns_queue) > 0:
                     avg_reward = round(float(np.mean(ep_returns_queue)), 3)
                 else:
@@ -839,20 +889,28 @@ if __name__ == "__main__":
 
                 print(f"PPO Avg Reward/Ep:    {avg_reward}")
                 
+                # 🛑 THE OMNI-SCANNER for Losses
                 p_loss, v_loss, ent = "N/A", "N/A", "N/A"
                 if isinstance(learn_report, dict):
                     for k, v in learn_report.items():
                         kl = k.lower()
-                        if 'policy' in kl and 'loss' in kl: p_loss = v
-                        elif 'value' in kl and 'loss' in kl: v_loss = v
+                        if ('policy' in kl and 'loss' in kl) or ('ppo' in kl and 'objective' in kl) or 'actor' in kl: p_loss = v
+                        elif ('value' in kl or 'critic' in kl) and 'loss' in kl: v_loss = v
                         elif 'entropy' in kl or 'ent' in kl: ent = v
                         
-                if p_loss == "N/A": p_loss = getattr(learner.ppo_learner, 'policy_loss', getattr(learner.ppo_learner, '_policy_loss', 'N/A'))
-                if v_loss == "N/A": v_loss = getattr(learner.ppo_learner, 'value_loss', getattr(learner.ppo_learner, '_value_loss', 'N/A'))
-                if ent == "N/A": ent = getattr(learner.ppo_learner, 'entropy', getattr(learner.ppo_learner, '_entropy', 'N/A'))
+                # Deep object scan fallback
+                if p_loss == "N/A": 
+                    for attr in ['policy_loss', '_policy_loss', 'avg_policy_loss', 'clip_loss']:
+                        if hasattr(learner.ppo_learner, attr): p_loss = getattr(learner.ppo_learner, attr)
+                if v_loss == "N/A": 
+                    for attr in ['value_loss', '_value_loss', 'avg_value_loss', 'vf_loss']:
+                        if hasattr(learner.ppo_learner, attr): v_loss = getattr(learner.ppo_learner, attr)
+                if ent == "N/A": 
+                    for attr in ['entropy', '_entropy', 'avg_entropy', 'ent_loss']:
+                        if hasattr(learner.ppo_learner, attr): ent = getattr(learner.ppo_learner, attr)
                 
                 def safe_round_loss(val):
-                    if val == "N/A": return val
+                    if val == "N/A" or val is None: return "N/A"
                     try:
                         if isinstance(val, torch.Tensor): val = val.item()
                         elif isinstance(val, np.ndarray): val = val.item()
@@ -892,7 +950,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V163_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V165_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -917,7 +975,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V163_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V165_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -952,8 +1010,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V163_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V163_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V165_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V165_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
