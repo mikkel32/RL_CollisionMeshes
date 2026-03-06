@@ -29,6 +29,10 @@ warnings.filterwarnings("ignore")
 logging.getLogger("torch.onnx").setLevel(logging.ERROR)
 logging.getLogger("torch.export").setLevel(logging.ERROR)
 
+import gym
+# Silence the Gym old step API deprecation warnings spam
+gym.logger.set_level(40)
+
 # 🛑 CRITICAL FIX 1: KILL "THREAD BOMB" DURING ROLLOUTS 🛑
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -38,7 +42,6 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import numpy as np
 import torch
-import gym
 from tqdm import tqdm
 
 import rlgym_sim
@@ -87,24 +90,31 @@ def cleanup_trackers():
 # ------------------------------------------------------------------------------
 def ensure_collision_meshes():
     """
-    🛑 DIRECT ROUTER: Directly grabs your perfect files from /content/collision_meshes
-    and drops them into the Current Working Directory so RocketSim can see them instantly.
+    🛑 DIRECT ROUTER: Auto-detects Colab paths and routes to CWD.
     """
     target_dir = os.path.join(os.getcwd(), "collision_meshes")
-    source_dir = "/content/collision_meshes"
     
+    # Look across all likely Colab paths
+    possible_sources = ["/content/RL_CollisionMeshes/collision_meshes", "/content/RL_CollisionMeshes", "/content/collision_meshes"]
+    source_dir = None
+    for p in possible_sources:
+        if os.path.exists(p) and len([f for f in os.listdir(p) if f.endswith(".cmf")]) > 0:
+            source_dir = p
+            break
+            
+    if source_dir is None:
+        print("⚠️ WARNING: Collision mesh source directory not found! RocketSim might crash.")
+        return
+
     if os.path.abspath(source_dir) == os.path.abspath(target_dir):
         return 
         
-    if os.path.exists(source_dir):
-        os.makedirs(target_dir, exist_ok=True)
-        for f in os.listdir(source_dir):
-            if f.endswith(".cmf"):
-                try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
-                except Exception: pass
-        print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
-    else:
-        print(f"⚠️ WARNING: {source_dir} not found! RocketSim might crash if meshes aren't local.")
+    os.makedirs(target_dir, exist_ok=True)
+    for f in os.listdir(source_dir):
+        if f.endswith(".cmf"):
+            try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
+            except Exception: pass
+    print(f"✅ Successfully routed perfectly formatted collision meshes from {source_dir} to {target_dir}")
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
@@ -372,11 +382,11 @@ class TemporalMemoryObservation(ObsBuilder):
 # 4. ALGEBRAICALLY PERFECT REWARD SHAPING & TRACKING
 # ------------------------------------------------------------------------------
 class TrackedCombinedReward(RewardFunction):
-    def __init__(self, reward_functions, reward_weights):
+    def __init__(self, reward_functions, reward_weights, names=None):
         super().__init__()
         self.reward_functions = tuple(reward_functions)
         self.reward_weights = tuple(reward_weights)
-        self.names = ["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "Aerial", "ShadowDef", "Recovery", "Boost"]
+        self.names = names if names is not None else [func.__class__.__name__ for func in self.reward_functions]
         self.stats = {name: 0.0 for name in self.names}
         self.steps = 0
         
@@ -458,7 +468,7 @@ class CompoundAerialReward(RewardFunction):
         touch_rew = 0.0
         if player.ball_touched:
             height_frac = min(max(pz, 0.0) * INV_2044, 1.0) 
-            touch_rew = float(height_frac) * 20.0 
+            touch_rew = float(height_frac) * 30.0 
             
         return float(shaping_rew + touch_rew)
 
@@ -529,6 +539,22 @@ class KinestheticShadowDefense(RewardFunction):
         v_mult = 1.0 + (v_match * 0.5) 
         
         return float(dist_factor * max(0.0, align) * v_mult)
+
+class AlignToBallReward(RewardFunction):
+    """🧠 NEW: Forces the AI to aggressively point its nose at the ball"""
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        bx, by, bz = state.ball.position
+        px, py, pz = player.car_data.position
+        
+        c2bx, c2by, c2bz = bx - px, by - py, bz - pz
+        c2b_mag = math.sqrt(c2bx**2 + c2by**2 + c2bz**2)
+        
+        if c2b_mag > 0:
+            fx, fy, fz = player.car_data.forward()
+            align = (c2bx*fx + c2by*fy + c2bz*fz) / c2b_mag
+            return float(max(0.0, align))
+        return 0.0
 
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS
@@ -608,18 +634,22 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
+    # 🛑 CRITICAL FIX: REWARD WEIGHTS BOOSTED FOR MAX AGGRESSION 🛑
+    # Heavily increased VelocityPlayerToBall (0.15) & Event Touch/Shot to force chasing and scoring.
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=15.0, concede=-15.0, shot=2.0, save=4.0, demo=1.5, touch=0.2), 
+            EventReward(goal=25.0, concede=-20.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
             VelocityBallToGoalReward(),            
             OffensivePushReward(), 
             VelocityPlayerToBallReward(), 
+            AlignToBallReward(), # Forces agent to face ball directly      
             CompoundAerialReward(),       
             KinestheticShadowDefense(),
             RecoveryReward(),
             DynamicBoostReward()
         ),
-        (1.0, 0.15, 0.08, 0.06, 0.12, 0.02, 0.05, 0.05)    
+        (1.0, 0.20, 0.08, 0.15, 0.08, 0.12, 0.02, 0.05, 0.05),
+        names=["Goal/Event", "BallToNet", "OffPush", "PlayerToBall", "AlignToBall", "Aerial", "ShadowDef", "Recovery", "Boost"]
     )
     
     action_parser = SOTAActionParser()
@@ -796,7 +826,11 @@ if __name__ == "__main__":
             learner.add_new_experience(experience)
             
             torch.set_num_threads(WORKER_CORES) 
-            learner.ppo_learner.learn(learner.experience_buffer)
+            
+            # 🛑 METRICS FIX: Dynamically capture the learning report dictionary so we can extract exact NA losses
+            learn_report = learner.ppo_learner.learn(learner.experience_buffer)
+            if not isinstance(learn_report, dict): 
+                learn_report = getattr(learner.ppo_learner, 'report', {})
             
             learner.agent.cumulative_timesteps += steps
             
@@ -822,18 +856,37 @@ if __name__ == "__main__":
                 print("\n" + "═"*60)
                 print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
                 
+                # 🛑 FIX FOR NA: Safely scan the dynamic metrics dictionary to find true Average Reward
+                avg_reward = "N/A"
                 if isinstance(metrics, dict):
-                    print(f"PPO Avg Reward/Step:  {metrics.get('Average Reward', 'N/A')}")
-                else:
-                    print(f"PPO Avg Reward/Step:  N/A")
+                    keys_to_check = ['Cumulative Reward', 'Average Reward', 'Episode Return', 'Reward', 'Episode Returns']
+                    for k in keys_to_check:
+                        if k in metrics:
+                            val = metrics[k]
+                            if isinstance(val, (list, tuple)) and len(val) > 0: avg_reward = sum(val) / len(val)
+                            elif isinstance(val, (float, int)): avg_reward = val
+                            break
+                elif isinstance(metrics, (list, tuple)) and len(metrics) > 0:
+                    avg_reward = sum(metrics) / len(metrics)
                     
-                p_loss = getattr(learner.ppo_learner, 'policy_loss', 'N/A')
-                v_loss = getattr(learner.ppo_learner, 'value_loss', 'N/A')
-                ent = getattr(learner.ppo_learner, 'entropy', 'N/A')
+                if isinstance(avg_reward, float):
+                    avg_reward = round(avg_reward, 3)
+
+                print(f"PPO Avg Reward/Ep:    {avg_reward}")
+                
+                # 🛑 FIX FOR NA: Safely parse the exact loss values out of the captured learn_report
+                p_loss = learn_report.get('Policy Loss', getattr(learner.ppo_learner, 'policy_loss', 'N/A'))
+                v_loss = learn_report.get('Value Function Loss', learn_report.get('Value Loss', getattr(learner.ppo_learner, 'value_loss', 'N/A')))
+                ent = learn_report.get('Entropy', getattr(learner.ppo_learner, 'entropy', 'N/A'))
+                
                 if isinstance(p_loss, torch.Tensor): p_loss = p_loss.item()
                 if isinstance(v_loss, torch.Tensor): v_loss = v_loss.item()
                 if isinstance(ent, torch.Tensor): ent = ent.item()
                 
+                if isinstance(p_loss, float): p_loss = round(p_loss, 5)
+                if isinstance(v_loss, float): v_loss = round(v_loss, 5)
+                if isinstance(ent, float): ent = round(ent, 5)
+
                 print(f"Policy Loss:          {p_loss}")
                 print(f"Value Loss (Critic):  {v_loss}")
                 print(f"Entropy:              {ent}")
