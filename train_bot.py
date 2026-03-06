@@ -1,6 +1,6 @@
 # ==============================================================================
-# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V162)
-# 40-Core EPYC / Direct Mesh Router / Anti-Camper Predator Overhaul
+# SOTA ROCKET LEAGUE AI - SIM-TO-REAL IMMORTAL ENGINE (SOTA V163)
+# 40-Core EPYC / Direct Mesh Router / Anti-Camper / Crash-Proof Metrics
 # ==============================================================================
 
 # 🛑 AUTO-DEPENDENCY INJECTION FOR GOOGLE COLAB 🛑
@@ -173,7 +173,7 @@ class RLBotONNXWrapper(torch.nn.Module):
         return out
 
 # ------------------------------------------------------------------------------
-# 2. VECTORIZED ACTION PARSER (Masterclass 648-Bin Compression)
+# 2. VECTORIZED ACTION PARSER 
 # ------------------------------------------------------------------------------
 class SOTAActionParser(ActionParser):
     def __init__(self):
@@ -208,7 +208,7 @@ class SOTAActionParser(ActionParser):
         return parsed
 
 # ------------------------------------------------------------------------------
-# 3. ULTRA-FAST OBSERVATION BUILDER (The Ghost Padding Matrix)
+# 3. ULTRA-FAST OBSERVATION BUILDER
 # ------------------------------------------------------------------------------
 class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
@@ -294,7 +294,7 @@ class TemporalMemoryObservation(ObsBuilder):
             oux, ouy, ouz = o_car.up()
             
             odx, ody, odz = ox - px, oy - py, oz - pz
-            odvx, odvy, odvz = ovx - vx, ovy - vy, ovz - vz
+            odvx, odvy, odvz = ovx - vx, ovy - vy, oz - vz
             
             local_ox = odx*fx + ody*fy + odz*fz
             local_oy = odx*rx + ody*ry + odz*rz
@@ -412,7 +412,6 @@ class TrackedCombinedReward(RewardFunction):
         return float(total_reward)
 
 class FaceAndChaseReward(RewardFunction):
-    """🧠 REWARD HACK FIX: The AI ONLY gets alignment points if it is driving FORWARD."""
     def reset(self, initial_state: GameState): pass
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         bx, by, bz = state.ball.position
@@ -428,8 +427,6 @@ class FaceAndChaseReward(RewardFunction):
             vx, vy, vz = player.car_data.linear_velocity
             vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist
             
-            # The secret sauce: Multiply alignment by velocity. 
-            # If it's standing still, vel_to_ball = 0, so Reward = 0.0
             if align > 0.0 and vel_to_ball > 0.0:
                 return float(align * (vel_to_ball * INV_2300))
         return 0.0
@@ -516,7 +513,6 @@ class DynamicBoostReward(RewardFunction):
         self.last_boost[player.car_id] = current_boost
         return float(rew * 0.05)
 
-
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS
 # ------------------------------------------------------------------------------
@@ -595,11 +591,6 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # 🛑 THE "PREDATOR" CONFIGURATION (Curing the Turret Exploit) 🛑
-    # 1. Shadow Defense has been deleted completely (no more retreating/camping).
-    # 2. PlayerToBall has a massive weight of 0.40 (force max speed forward driving).
-    # 3. FaceAndChase replaces the old alignment (cannot earn points while standing still).
-    # 4. Concede penalty lowered to -5.0 so it isn't afraid to miss an aerial block.
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=15.0, concede=-5.0, shot=5.0, save=4.0, demo=1.5, touch=1.0), 
@@ -624,7 +615,6 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        # 🛑 Reduced NoTouchTimeout to 150 (approx 10 secs) to force faster plays
         terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
     )
     
@@ -632,7 +622,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V162 MAIN PPO ENGINE
+# 7. SOTA V163 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -643,7 +633,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V162)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V163)...")
     
     try:
         temp_env = build_env()
@@ -692,7 +682,6 @@ if __name__ == "__main__":
         log_to_wandb=False
     )
 
-    # 🛑 THE FIX FOR THE [] BUG: Rolling Queue to remember episode completions
     ep_returns_queue = collections.deque(maxlen=100)
 
     # 🛑 ♻️ THE ULTIMATE AUTO-RESUME PROTOCOL ♻️ 🛑
@@ -818,32 +807,38 @@ if __name__ == "__main__":
             learner.ppo_ent_coef = new_ent
             learner.ppo_learner.ent_coef = new_ent
             
-            # 🛑 METRICS FIX: Extract and append recent returns to smooth out [] lists
+            # 🛑 CRASH FIX: Extract metrics safely by flattening into pure Python floats
             if isinstance(metrics, dict):
                 for k in ['Episode Returns', 'Cumulative Reward', 'Average Reward', 'Episode Return', 'Reward']:
                     if k in metrics:
-                        val = metrics[k]
-                        if isinstance(val, (list, tuple, np.ndarray)):
-                            ep_returns_queue.extend(val)
-                        elif isinstance(val, (float, int)):
-                            ep_returns_queue.append(val)
+                        try:
+                            val = metrics[k]
+                            if isinstance(val, torch.Tensor): val = val.detach().cpu().numpy()
+                            # Force flattening arrays of any depth into pure decimals
+                            for v in np.asarray(val).flatten():
+                                if not np.isnan(v): ep_returns_queue.append(float(v))
+                        except Exception: pass
                         break
-            elif isinstance(metrics, (list, tuple, np.ndarray)):
-                ep_returns_queue.extend(metrics)
+            else:
+                try:
+                    val = metrics
+                    if isinstance(val, torch.Tensor): val = val.detach().cpu().numpy()
+                    for v in np.asarray(val).flatten():
+                        if not np.isnan(v): ep_returns_queue.append(float(v))
+                except Exception: pass
 
             if (i + 1) > start_iter and (i + 1) % 50 == 0:
                 print("\n" + "═"*60)
                 print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
                 
-                # Retrieve from the rolling queue we just built
+                # 🛑 SAFE MATH: float(np.mean()) prevents any array-based rounding panics
                 if len(ep_returns_queue) > 0:
-                    avg_reward = round(sum(ep_returns_queue) / len(ep_returns_queue), 3)
+                    avg_reward = round(float(np.mean(ep_returns_queue)), 3)
                 else:
                     avg_reward = "N/A (Awaiting Eps)"
 
                 print(f"PPO Avg Reward/Ep:    {avg_reward}")
                 
-                # 🛑 FOOLPROOF LOSS PARSER: Search internal dict by string parts
                 p_loss, v_loss, ent = "N/A", "N/A", "N/A"
                 if isinstance(learn_report, dict):
                     for k, v in learn_report.items():
@@ -856,17 +851,18 @@ if __name__ == "__main__":
                 if v_loss == "N/A": v_loss = getattr(learner.ppo_learner, 'value_loss', getattr(learner.ppo_learner, '_value_loss', 'N/A'))
                 if ent == "N/A": ent = getattr(learner.ppo_learner, 'entropy', getattr(learner.ppo_learner, '_entropy', 'N/A'))
                 
-                if isinstance(p_loss, torch.Tensor): p_loss = p_loss.item()
-                if isinstance(v_loss, torch.Tensor): v_loss = v_loss.item()
-                if isinstance(ent, torch.Tensor): ent = ent.item()
-                
-                if isinstance(p_loss, float): p_loss = round(p_loss, 5)
-                if isinstance(v_loss, float): v_loss = round(v_loss, 5)
-                if isinstance(ent, float): ent = round(ent, 5)
+                def safe_round_loss(val):
+                    if val == "N/A": return val
+                    try:
+                        if isinstance(val, torch.Tensor): val = val.item()
+                        elif isinstance(val, np.ndarray): val = val.item()
+                        return round(float(val), 5)
+                    except:
+                        return "N/A"
 
-                print(f"Policy Loss:          {p_loss}")
-                print(f"Value Loss (Critic):  {v_loss}")
-                print(f"Entropy:              {ent}")
+                print(f"Policy Loss:          {safe_round_loss(p_loss)}")
+                print(f"Value Loss (Critic):  {safe_round_loss(v_loss)}")
+                print(f"Entropy:              {safe_round_loss(ent)}")
                 
                 try:
                     telemetry_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_reward_telemetry_") and f.endswith(".json")]
@@ -896,7 +892,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V162_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V163_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -921,7 +917,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V162_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V163_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -956,8 +952,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V162_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V162_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V163_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V163_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
