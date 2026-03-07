@@ -566,6 +566,17 @@ class DynamicBoostReward(RewardFunction):
             rew = (current_boost - last_b) * (1.0 + starvation_mult) * 2.0
         return float(rew)
 
+# ⭐ V167: TOUCH QUALITY REWARD (replaces CompoundAerialReward)
+class TouchBallReward(RewardFunction):
+    """Rewards touching the ball, scaled by resulting ball speed (strong hits > weak taps)."""
+    def reset(self, initial_state: GameState): pass
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        if player.ball_touched:
+            bvx, bvy, bvz = state.ball.linear_velocity
+            ball_speed = math.sqrt(bvx**2 + bvy**2 + bvz**2)
+            return float(min(1.0, ball_speed / 4600.0))
+        return 0.0
+
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS (⭐ HIGHLIGHT: AERIAL INTERCEPT INJECTED)
 # ------------------------------------------------------------------------------
@@ -659,23 +670,22 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ HIGHLIGHT: THE REWARD SQUISH (Curing the Chaser)
+    # ⭐ V167: GROUND-FIRST REWARD STRUCTURE (No aerial until bot can drive and score)
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=25.0, concede=-10.0, shot=8.0, save=6.0, demo=2.0, touch=0.5), 
-            VelocityBallToGoalReward(),            # Force the ball towards the net!
-            PositionToShootReward(),               # (Decayed)
-            FearlessPlayerToBallReward(),          # (Decayed) Stop mindless chasing
-            FaceAndChaseReward(),                  # (Decayed)
-            CompoundAerialReward(),                # 🚀 MASSIVELY INCREASED to force flight
-            RecoveryReward(),                      # 🛬 Increased to force wave-dashes/landing
-            DynamicBoostReward()                   # ⛽ Increased so the bot learns to path over pads
+            EventReward(goal=100.0, concede=-100.0, shot=15.0, save=30.0, demo=5.0, touch=3.0), 
+            VelocityBallToGoalReward(),            # #1 PRIORITY: Force the ball towards the net!
+            PositionToShootReward(),               # Get behind ball, facing opponent goal
+            FearlessPlayerToBallReward(),          # Drive towards the ball with speed
+            FaceAndChaseReward(),                  # Align car forward vector with ball direction
+            TouchBallReward(),                     # ⭐ NEW: Reward strong ball hits over weak taps
+            DynamicBoostReward()                   # ⛽ Learn to path over pads
         ),
-        # NEW PERFECT WEIGHTS:
-        # [Event, BallToNet, Position, PlayerToBall, FaceChase, Aerial, Recovery, Boost]
-        (1.0,     2.00,      0.02,     0.02,         0.01,      3.0,    0.20,     0.50),
+        # V167 WEIGHTS: BallToNet dominates, events are massive, no aerial distraction
+        # [Event,  BallToNet, Position, PlayerToBall, FaceChase, Touch, Boost]
+        (1.0,     5.0,       0.5,      1.0,          0.5,       2.0,   0.3),
         
-        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Aerial", "Recovery", "Boost"]
+        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Touch", "Boost"]
     )
     
     action_parser = SOTAActionParser()
@@ -687,7 +697,7 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
+        terminal_conditions=[TimeoutCondition(2000), GoalScoredCondition(), NoTouchTimeoutCondition(300)]
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
@@ -706,7 +716,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V166)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V167)...")
     
     try:
         temp_env = build_env()
@@ -725,10 +735,10 @@ if __name__ == "__main__":
     
     GLOBAL_BATCH_SIZE = 100_000 
     EXP_BUFFER = 300_000 
-    MINI_BATCH = 20_000 
+    MINI_BATCH = 25_000     # V167: Slightly larger for stability
     
-    BASE_ITERS = 12000
-    EXTENSION_STEP = 3000
+    BASE_ITERS = 15000
+    EXTENSION_STEP = 5000
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
@@ -743,13 +753,13 @@ if __name__ == "__main__":
         standardize_obs=False,
         standardize_returns=True,
         
-        policy_lr=2e-4,
-        critic_lr=4e-4, 
+        policy_lr=5e-4,        # V167: 2.5x stronger to push entropy down faster
+        critic_lr=5e-4,        # V167: Matched to policy for stability
         
-        ppo_epochs=4, 
+        ppo_epochs=3,          # V167: Reduced from 4 to prevent overfitting on stale data
         
-        policy_layer_sizes=(512, 512, 512),               
-        critic_layer_sizes=(512, 512, 512),      
+        policy_layer_sizes=(256, 256, 256),    # V167: Smaller = faster convergence with 351 actions           
+        critic_layer_sizes=(256, 256, 256),      
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
@@ -874,9 +884,10 @@ if __name__ == "__main__":
             learner.agent.cumulative_timesteps += steps
             
             progress = min(1.0, i / max(1, TOTAL_ITERS))
-            new_policy_lr = 2e-4 - ((2e-4 - 1e-5) * progress)
-            new_critic_lr = 4e-4 - ((4e-4 - 5e-5) * progress) 
-            new_ent = 0.01 - ((0.01 - 0.005) * progress)
+            # V167: LR floor 1e-4 (was 1e-5), entropy decays 10x to 0.001 (was 2x to 0.005)
+            new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
+            new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
+            new_ent = 0.01 * (1.0 - 0.9 * progress)         # 0.01 → 0.001
             
             try:
                 if hasattr(learner.ppo_learner, 'optimizer'):
@@ -922,8 +933,9 @@ if __name__ == "__main__":
                 if isinstance(learn_report, dict):
                     for k, v in learn_report.items():
                         kl = k.lower()
-                        if ('policy' in kl and 'loss' in kl) or ('ppo' in kl and 'objective' in kl) or 'actor' in kl: p_loss = v
-                        elif ('value' in kl or 'critic' in kl) and 'loss' in kl: v_loss = v
+                        # V167: Broadened key scanning to fix N/A display bug
+                        if 'loss' in kl and ('policy' in kl or 'ppo' in kl or 'actor' in kl or 'clip' in kl or 'surr' in kl): p_loss = v
+                        elif 'loss' in kl and ('value' in kl or 'critic' in kl or 'vf' in kl): v_loss = v
                         elif 'entropy' in kl or 'ent' in kl: ent = v
                         
                 # Deep object scan fallback
@@ -978,7 +990,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V166_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V167_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -1003,7 +1015,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V166_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V167_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -1038,8 +1050,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V166_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V166_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V167_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V167_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
