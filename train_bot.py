@@ -595,7 +595,7 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(2000), GoalScoredCondition(), NoTouchTimeoutCondition(300)]
+        terminal_conditions=[TimeoutCondition(2000), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
     )
     
     env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
@@ -633,7 +633,7 @@ if __name__ == "__main__":
         print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
 
-    WORKER_CORES = 36  # 🚀 Leave 4 physical cores for PyTorch GPU feeding + OS
+    WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
     GLOBAL_BATCH_SIZE = 65_536       # 🚀 Power of 2 tensor size (faster VRAM alloc)
     EXP_BUFFER = 655_360             # 🧠 10x batch size for rare aerial memory
@@ -788,7 +788,7 @@ if __name__ == "__main__":
             
             learner.add_new_experience(experience)
             
-            torch.set_num_threads(WORKER_CORES) 
+            torch.set_num_threads(4)  # 🚀 GPU backprop doesn't need 44 CPU threads — 4 is enough for data loading
             
             learn_report = learner.ppo_learner.learn(learner.experience_buffer)
             if not isinstance(learn_report, dict): 
