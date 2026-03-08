@@ -639,7 +639,7 @@ if __name__ == "__main__":
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
     GLOBAL_BATCH_SIZE = 32_768       # 🚀 Fast turnaround (updates brain 2x faster in wall-clock)
-    EXP_BUFFER = 98_304              # 🧠 3x batch = data diversity without staleness
+    EXP_BUFFER = 163_840             # 🧠 5x batch = optimal diversity ceiling (KL stays < 0.05)
     MINI_BATCH = 16_384              # 🚀 Exactly 2 splits for Ampere GPUs
     
     BASE_ITERS = 15000
