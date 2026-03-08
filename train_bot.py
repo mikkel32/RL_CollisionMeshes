@@ -771,15 +771,10 @@ if __name__ == "__main__":
                 start_iter = 0
                 TOTAL_ITERS = BASE_ITERS
 
-    # 🚀 SPEED FIX: Compile the PyTorch models for ~30% faster forward/backward passes
-    try:
-        import torch._dynamo
-        torch._dynamo.config.suppress_errors = True
-        learner.ppo_learner.policy = torch.compile(learner.ppo_learner.policy, mode="max-autotune")
-        learner.ppo_learner.value_net = torch.compile(learner.ppo_learner.value_net, mode="max-autotune")
-        print("✅ PyTorch 2.0 Compiler Enabled (max-autotune)!")
-    except Exception as e:
-        print(f"⚠️ torch.compile not available: {e}")
+    # 🚀 NOTE: torch.compile REMOVED for 384K param model — compilation overhead exceeds
+    # any forward/backward speedup at this scale. Was causing iterations to slow from 1.9s to 2.4s
+    # as the JIT compiler kicked in. torch.compile benefits models with millions of params, not 384K.
+    print("✅ Training with native PyTorch (optimal for 384K param model)")
 
     try:
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
