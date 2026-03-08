@@ -143,8 +143,8 @@ class ReturnTrackerWrapper(gym.Wrapper):
         return step_returns
 
     def _flush_buffer(self, force=False):
-        # 🚀 SPEED FIX: Write to disk every 200 episodes (4x less I/O than 50, but data shows within minutes)
-        if len(self.return_buffer) >= 200 or (force and len(self.return_buffer) > 0):
+        # 🚀 SPEED FIX: Flush every 2000 episodes (keeps data in RAM, avoids disk locks)
+        if len(self.return_buffer) >= 2000 or (force and len(self.return_buffer) > 0):
             try:
                 with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
                     f.write("\n".join(self.return_buffer) + "\n")
@@ -381,7 +381,10 @@ class TrackedCombinedReward(RewardFunction):
         self.reward_functions = tuple(reward_functions)
         self.reward_weights = tuple(reward_weights)
         self.names = names if names is not None else [func.__class__.__name__ for func in self.reward_functions]
-        self.stats = {name: 0.0 for name in self.names}
+        
+        # 🚀 SPEED FIX: Integer array avoids heavy Python string hashing every tick
+        self.num_funcs = len(self.reward_functions)
+        self._fast_stats = [0.0] * self.num_funcs
         self.steps = 0
         
     def reset(self, initial_state: GameState):
@@ -390,20 +393,19 @@ class TrackedCombinedReward(RewardFunction):
 
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         total_reward = 0.0
-        for i, func in enumerate(self.reward_functions):
-            r = func.get_reward(player, state, prev_action) * self.reward_weights[i]
-            self.stats[self.names[i]] += r
+        # O(1) integer iteration
+        for i in range(self.num_funcs):
+            r = self.reward_functions[i].get_reward(player, state, prev_action) * self.reward_weights[i]
+            self._fast_stats[i] += r
             total_reward += r
             
         self.steps += 1
-        # 🚀 SPEED FIX: Dump JSON every 100,000 steps
         if self.steps % 100000 == 0:
             try:
-                avg_stats = {k: v/100000 for k, v in self.stats.items()}
+                avg_stats = {self.names[i]: self._fast_stats[i]/100000 for i in range(self.num_funcs)}
                 with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
                     json.dump(avg_stats, f)
-                for k in self.names:
-                    self.stats[k] = 0.0
+                self._fast_stats = [0.0] * self.num_funcs
             except Exception: pass
                 
         return total_reward
@@ -636,9 +638,9 @@ if __name__ == "__main__":
 
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
-    GLOBAL_BATCH_SIZE = 65_536       # 🚀 Power of 2 tensor size (faster VRAM alloc)
-    EXP_BUFFER = 655_360             # 🧠 10x batch size for rare aerial memory
-    MINI_BATCH = 32_768              # 🚀 Exactly 2 splits for massive GPU saturation
+    GLOBAL_BATCH_SIZE = 32_768       # 🚀 Fast turnaround (updates brain 2x faster in wall-clock)
+    EXP_BUFFER = 32_768              # 🚀 Strictly ON-POLICY (no stale off-policy gradients)
+    MINI_BATCH = 16_384              # 🚀 Exactly 2 splits for Ampere GPUs
     
     BASE_ITERS = 15000
     EXTENSION_STEP = 5000
@@ -660,10 +662,10 @@ if __name__ == "__main__":
         policy_lr=5e-4,
         critic_lr=5e-4,
         
-        ppo_epochs=2,              # 🚀 SPEED FIX: 33% less backprop per iteration
+        ppo_epochs=2,              # 🚀 SPEED FIX: Less backprop per iteration
         
-        policy_layer_sizes=(256, 256),         # 🚀 SPEED FIX: 33% faster forward/backward (2 layers sufficient for 92-dim 1v1)
-        critic_layer_sizes=(256, 256, 256),    # Keep critic deeper for value estimation
+        policy_layer_sizes=(256, 256),       # 2 layers sufficient for 92-dim 1v1
+        critic_layer_sizes=(256, 256),       # 🚀 Removed 3rd layer (33% faster backprop)
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
@@ -783,8 +785,6 @@ if __name__ == "__main__":
             experience, metrics, steps, coll_time = learner.agent.collect_timesteps(GLOBAL_BATCH_SIZE)
             
             learner.add_new_experience(experience)
-            
-            torch.set_num_threads(4)  # 🚀 GPU backprop doesn't need 44 CPU threads — 4 is enough for data loading
             
             learn_report = learner.ppo_learner.learn(learner.experience_buffer)
             if not isinstance(learn_report, dict): 
