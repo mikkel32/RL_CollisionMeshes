@@ -247,13 +247,9 @@ class SOTAActionParser(ActionParser):
         return gym.spaces.Discrete(len(self._lookup_table))
 
     def parse_actions(self, actions: Any, state: GameState) -> np.ndarray:
-        # 🚀 SPEED FIX: Bypass slow NumPy array flattening/clipping
-        try:
-            idx = int(actions.item()) if hasattr(actions, 'item') else int(actions[0])
-        except (TypeError, IndexError):
-            idx = int(actions)
-        idx = max(0, min(idx, len(self._lookup_table) - 1))
-        return self._lookup_table[idx]
+        # 🚀 SPEED FIX: No .copy(), direct lookup table indexing
+        actions = np.asarray(actions, dtype=np.int32).flatten()
+        return self._lookup_table[np.clip(actions, 0, len(self._lookup_table) - 1)]
 
 # ------------------------------------------------------------------------------
 # 3. ULTRA-FAST OBSERVATION BUILDER
