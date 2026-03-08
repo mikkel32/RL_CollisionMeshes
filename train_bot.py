@@ -306,7 +306,7 @@ class TemporalMemoryObservation(ObsBuilder):
         obs[21:24] = (dx*fx + dy*fy + dz*fz) * INV_10240, (dx*rx + dy*ry + dz*rz) * INV_10240, (dx*ux + dy*uy + dz*uz) * INV_10240
         obs[24:27] = (dvx*fx + dvy*fy + dvz*fz) * INV_8300, (dvx*rx + dvy*ry + dvz*rz) * INV_8300, (dvx*ux + dvy*uy + dvz*uz) * INV_8300
         
-        obs[27] = player.boost_amount ** 0.5  # **0.5 is faster than math.sqrt() in Python
+        obs[27] = max(0.0, player.boost_amount) ** 0.5
         obs[28:31] = float(player.on_ground), float(player.has_flip), float(player.is_demoed)
         obs[31:34] = h_len * INV_150, h_wid * INV_100, h_hei * INV_50
 
@@ -332,7 +332,7 @@ class TemporalMemoryObservation(ObsBuilder):
             obs[idx:idx+3] = (odx*fx + ody*fy + odz*fz) * INV_10240, (odx*rx + ody*ry + odz*rz) * INV_10240, (odx*ux + ody*uy + odz*uz) * INV_10240
             obs[idx+3:idx+6] = (odvx*fx + odvy*fy + odvz*fz) * INV_4600, (odvx*rx + odvy*ry + odvz*rz) * INV_4600, (odvx*ux + odvy*uy + odvz*uz) * INV_4600
             obs[idx+6:idx+15] = ofx, ofy, ofz, orx, o_ry, orz, oux, ouy, ouz
-            obs[idx+15] = other.boost_amount ** 0.5
+            obs[idx+15] = max(0.0, other.boost_amount) ** 0.5
             idx += 16
             added_opps += 1
             
@@ -356,7 +356,7 @@ class TemporalMemoryObservation(ObsBuilder):
             obs[idx:idx+3] = (tdx*fx + tdy*fy + tdz*fz) * INV_10240, (tdx*rx + tdy*ry + tdz*rz) * INV_10240, (tdx*ux + tdy*uy + tdz*uz) * INV_10240
             obs[idx+3:idx+6] = (tdvx*fx + tdvy*fy + tdvz*fz) * INV_4600, (tdvx*rx + tdvy*ry + tdvz*rz) * INV_4600, (tdvx*ux + tdvy*uy + tdvz*uz) * INV_4600
             obs[idx+6:idx+15] = tfx, tfy, tfz, trx, t_ry, trz, tux, tuy, tuz
-            obs[idx+15] = other.boost_amount ** 0.5
+            obs[idx+15] = max(0.0, other.boost_amount) ** 0.5
             idx += 16
             added_tm8s += 1
             
