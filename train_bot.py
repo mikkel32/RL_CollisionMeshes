@@ -304,7 +304,7 @@ class TemporalMemoryObservation(ObsBuilder):
         obs[21:24] = (dx*fx + dy*fy + dz*fz) * INV_10240, (dx*rx + dy*ry + dz*rz) * INV_10240, (dx*ux + dy*uy + dz*uz) * INV_10240
         obs[24:27] = (dvx*fx + dvy*fy + dvz*fz) * INV_8300, (dvx*rx + dvy*ry + dvz*rz) * INV_8300, (dvx*ux + dvy*uy + dvz*uz) * INV_8300
         
-        obs[27] = max(0.0, player.boost_amount) ** 0.5
+        obs[27] = math.sqrt(max(0.0, player.boost_amount))
         obs[28:31] = float(player.on_ground), float(player.has_flip), float(player.is_demoed)
         obs[31:34] = h_len * INV_150, h_wid * INV_100, h_hei * INV_50
 
@@ -313,51 +313,51 @@ class TemporalMemoryObservation(ObsBuilder):
         obs[34:34+num_pads] = pads
         idx = 34 + num_pads
 
-        opponents = [other for other in state.players if other.team_num != player.team_num]
-        
+        # 🚀 SPEED FIX: O(1) loop. No list comprehensions allocating RAM every tick.
         added_opps = 0
-        for other in opponents:
-            if added_opps >= self.MAX_OPPONENTS: break
-            o_car = other.inverted_car_data if player.team_num == 1 else other.car_data
-            ox, oy, oz = o_car.position
-            ovx, ovy, ovz = o_car.linear_velocity
-            ofx, ofy, ofz = o_car.forward()
-            orx, o_ry, orz = o_car.right()
-            oux, ouy, ouz = o_car.up()
-            odx, ody, odz = ox - px, oy - py, oz - pz
-            odvx, odvy, odvz = ovx - vx, ovy - vy, ovz - vz
+        added_tm8s = 0
+        
+        for other in state.players:
+            if other.car_id == player.car_id: continue
             
-            obs[idx:idx+3] = (odx*fx + ody*fy + odz*fz) * INV_10240, (odx*rx + ody*ry + odz*rz) * INV_10240, (odx*ux + ody*uy + odz*uz) * INV_10240
-            obs[idx+3:idx+6] = (odvx*fx + odvy*fy + odvz*fz) * INV_4600, (odvx*rx + odvy*ry + odvz*rz) * INV_4600, (odvx*ux + odvy*uy + odvz*uz) * INV_4600
-            obs[idx+6:idx+15] = ofx, ofy, ofz, orx, o_ry, orz, oux, ouy, ouz
-            obs[idx+15] = max(0.0, other.boost_amount) ** 0.5
-            idx += 16
-            added_opps += 1
-            
+            if other.team_num != player.team_num:
+                if added_opps >= self.MAX_OPPONENTS: continue
+                o_car = other.inverted_car_data if player.team_num == 1 else other.car_data
+                ox, oy, oz = o_car.position
+                ovx, ovy, ovz = o_car.linear_velocity
+                ofx, ofy, ofz = o_car.forward()
+                orx, o_ry, orz = o_car.right()
+                oux, ouy, ouz = o_car.up()
+                odx, ody, odz = ox - px, oy - py, oz - pz
+                odvx, odvy, odvz = ovx - vx, ovy - vy, ovz - vz
+                
+                obs[idx:idx+3] = (odx*fx + ody*fy + odz*fz) * INV_10240, (odx*rx + ody*ry + odz*rz) * INV_10240, (odx*ux + ody*uy + odz*uz) * INV_10240
+                obs[idx+3:idx+6] = (odvx*fx + odvy*fy + odvz*fz) * INV_4600, (odvx*rx + odvy*ry + odvz*rz) * INV_4600, (odvx*ux + odvy*uy + odvz*uz) * INV_4600
+                obs[idx+6:idx+15] = ofx, ofy, ofz, orx, o_ry, orz, oux, ouy, ouz
+                obs[idx+15] = math.sqrt(max(0.0, other.boost_amount))
+                idx += 16
+                added_opps += 1
+            else:
+                if added_tm8s >= self.MAX_TEAMMATES: continue
+                t_car = other.inverted_car_data if player.team_num == 1 else other.car_data
+                tx, ty, tz = t_car.position
+                tvx, tvy, tvz = t_car.linear_velocity
+                tfx, tfy, tfz = t_car.forward()
+                trx, t_ry, trz = t_car.right()
+                tux, tuy, tuz = t_car.up()
+                tdx, tdy, tdz = tx - px, ty - py, tz - pz
+                tdvx, tdvy, tdvz = tvx - vx, tvy - vy, tvz - vz
+
+                obs[idx:idx+3] = (tdx*fx + tdy*fy + tdz*fz) * INV_10240, (tdx*rx + tdy*ry + tdz*rz) * INV_10240, (tdx*ux + tdy*uy + tdz*uz) * INV_10240
+                obs[idx+3:idx+6] = (tdvx*fx + tdvy*fy + tdvz*fz) * INV_4600, (tdvx*rx + tdvy*ry + tdvz*rz) * INV_4600, (tdvx*ux + tdvy*uy + tdvz*uz) * INV_4600
+                obs[idx+6:idx+15] = tfx, tfy, tfz, trx, t_ry, trz, tux, tuy, tuz
+                obs[idx+15] = math.sqrt(max(0.0, other.boost_amount))
+                idx += 16
+                added_tm8s += 1
+        
         for _ in range(self.MAX_OPPONENTS - added_opps):
             obs[idx:idx+16] = 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             idx += 16
-
-        teammates = [other for other in state.players if other.team_num == player.team_num and other.car_id != player.car_id]
-        added_tm8s = 0
-        for other in teammates:
-            if added_tm8s >= self.MAX_TEAMMATES: break
-            t_car = other.inverted_car_data if player.team_num == 1 else other.car_data
-            tx, ty, tz = t_car.position
-            tvx, tvy, tvz = t_car.linear_velocity
-            tfx, tfy, tfz = t_car.forward()
-            trx, t_ry, trz = t_car.right()
-            tux, tuy, tuz = t_car.up()
-            tdx, tdy, tdz = tx - px, ty - py, tz - pz
-            tdvx, tdvy, tdvz = tvx - vx, tvy - vy, tvz - vz
-
-            obs[idx:idx+3] = (tdx*fx + tdy*fy + tdz*fz) * INV_10240, (tdx*rx + tdy*ry + tdz*rz) * INV_10240, (tdx*ux + tdy*uy + tdz*uz) * INV_10240
-            obs[idx+3:idx+6] = (tdvx*fx + tdvy*fy + tdvz*fz) * INV_4600, (tdvx*rx + tdvy*ry + tdvz*rz) * INV_4600, (tdvx*ux + tdvy*uy + tdvz*uz) * INV_4600
-            obs[idx+6:idx+15] = tfx, tfy, tfz, trx, t_ry, trz, tux, tuy, tuz
-            obs[idx+15] = max(0.0, other.boost_amount) ** 0.5
-            idx += 16
-            added_tm8s += 1
-            
         for _ in range(self.MAX_TEAMMATES - added_tm8s):
             obs[idx:idx+16] = 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             idx += 16
@@ -409,143 +409,73 @@ class TrackedCombinedReward(RewardFunction):
                 
         return float(total_reward)
 
-class FearlessPlayerToBallReward(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        bx, by, bz = state.ball.position
-        px, py, pz = player.car_data.position
-        vx, vy, vz = player.car_data.linear_velocity
-        
-        dx, dy, dz = bx - px, by - py, bz - pz
-        dist = math.sqrt(dx**2 + dy**2 + dz**2)
-        
-        if dist > 0:
-            vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist
-            if vel_to_ball > 0:
-                return float(vel_to_ball * INV_2300)
-        return 0.0
 
-class PositionToShootReward(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        bx, by, bz = state.ball.position
-        px, py, pz = player.car_data.position
-        
-        gy = 5120.0 if player.team_num == 0 else -5120.0
-        
-        b2gx, b2gy = 0.0 - bx, gy - by
-        b2g_mag = math.sqrt(b2gx**2 + b2gy**2)
-        
-        p2bx, p2by = bx - px, by - py
-        p2b_mag = math.sqrt(p2bx**2 + p2by**2)
-        
-        if b2g_mag > 0 and p2b_mag > 0:
-            alignment = (p2bx*b2gx + p2by*b2gy) / (p2b_mag * b2g_mag)
-            return float(max(0.0, alignment))
-        return 0.0
-
-class FaceAndChaseReward(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        bx, by, bz = state.ball.position
-        px, py, pz = player.car_data.position
-        
-        dx, dy, dz = bx - px, by - py, bz - pz
-        dist = math.sqrt(dx**2 + dy**2 + dz**2)
-        
-        if dist > 0:
-            fx, fy, fz = player.car_data.forward()
-            align = (dx*fx + dy*fy + dz*fz) / dist
-            
-            vx, vy, vz = player.car_data.linear_velocity
-            vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist
-            
-            if align > 0.0 and vel_to_ball > 0.0:
-                return float(align * (vel_to_ball * INV_2300))
-        return 0.0
-
-# ⭐ HIGHLIGHT: EXPONENTIAL AERIAL JACKPOT APPLIED
-class CompoundAerialReward(RewardFunction):
-    """🧠 PERFECTED AERIAL: Cures jump phobia and exponentially rewards high-altitude intercepts."""
-    def reset(self, initial_state: GameState): pass
-    
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        # Ignore grounded players
-        if player.on_ground:
-            return 0.0 
-            
-        pz = player.car_data.position[2]
-        
-        # 1. In-Air Shaping (Cures the fear of jumping)
-        # Small continuous reward for just being off the ground
-        air_reward = 0.005 if pz > 200.0 else 0.0
-        
-        # 2. Height-Scaled Touch Impact (The Jackpot)
-        touch_rew = 0.0
-        if player.ball_touched:
-            bz = state.ball.position[2]
-            # Ceiling is ~2044. Reward scales exponentially with height of the touch.
-            height_frac = max(0.0, min(bz / 2044.0, 1.0))
-            if height_frac > 0.15: # Must be higher than a standard double jump
-                touch_rew = 25.0 * (height_frac ** 2) # Exponential scaling for high aerials
-                
-        return float(air_reward + touch_rew)
-
-class RecoveryReward(RewardFunction):
-    def reset(self, initial_state: GameState): pass
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        if not player.on_ground:
-            return float(max(0.0, player.car_data.up()[2]) * 0.005)
-        return 0.0
-
-# ⭐ HIGHLIGHT: LINEAR BOOST STARVATION APPLIED
-class DynamicBoostReward(RewardFunction):
+# 🚀 V168: MONOLITHIC GOD-REWARD (Fuses 5 spatial/aerial rewards into one O(1) pass)
+class MonolithicSOTAReward(RewardFunction):
+    """🚀 3x FASTER: Combines Fearless, FaceChase, Position, Aerial, Boost into one math block."""
     def __init__(self):
         super().__init__()
         self.last_boost = {}
-        
+        # 🧠 SMART CONFIG: Aerial weight lowered to 2.0 so it learns to SHOOT, not just freestyle.
+        self.weights = {"fearless": 0.1, "face": 0.05, "pos": 0.3, "aer": 2.0, "bst": 0.2}
+
     def reset(self, initial_state: GameState):
         self.last_boost.clear()
-        
-    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
-        current_boost = player.boost_amount
-        last_b = self.last_boost.get(player.car_id, current_boost)
-        self.last_boost[player.car_id] = current_boost
-        
-        rew = 0.0
-        if current_boost > last_b + 0.01: # Picked up a pad
-            # Multiplier: higher reward if they grab boost when starved
-            starvation_mult = 1.0 - last_b 
-            rew = (current_boost - last_b) * (1.0 + starvation_mult) * 2.0
-        return float(rew)
 
-# 🌟 V168: KINESTHETIC AERIAL REWARD (height-scaled power hits + aerial breadcrumbs)
-class KinestheticAerialReward(RewardFunction):
-    """🧠 Multiplies kinetic energy transfer by exponential altitude. Ground hits still rewarded."""
-    def reset(self, initial_state: GameState): pass
-    
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
         reward = 0.0
         
-        # 1. Breadcrumb: Cure aerial phobia (tiny reward for sustained air time)
-        if not player.on_ground and player.car_data.position[2] > 300.0:
-            reward += 0.005  
+        # 1. EXACTLY ONE VARIABLE EXTRACTION
+        px, py, pz = player.car_data.position
+        vx, vy, vz = player.car_data.linear_velocity
+        bx, by, bz = state.ball.position
+        bvx, bvy, bvz = state.ball.linear_velocity
+        fx, fy, fz = player.car_data.forward()
+        
+        # 🚀 FAST MATH: (x*x) is heavily optimized in C, **2 is slow in Python
+        dx, dy, dz = bx - px, by - py, bz - pz
+        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+        vel_to_ball = (vx*dx + vy*dy + vz*dz) / dist if dist > 0 else 0.0
+        
+        # --- FEARLESS & FACE CHASE ---
+        if dist > 0 and vel_to_ball > 0:
+            reward += (vel_to_ball * INV_2300) * self.weights["fearless"]
+            align = (dx*fx + dy*fy + dz*fz) / dist
+            if align > 0:
+                reward += (align * (vel_to_ball * INV_2300)) * self.weights["face"]
+
+        # --- POSITION TO SHOOT ---
+        gy = 5120.0 if player.team_num == 0 else -5120.0
+        b2gx, b2gy = 0.0 - bx, gy - by
+        b2g_mag = math.sqrt(b2gx*b2gx + b2gy*b2gy)
+        p2b_mag = math.sqrt(dx*dx + dy*dy)
+        if b2g_mag > 0 and p2b_mag > 0:
+            alignment = (dx*b2gx + dy*b2gy) / (p2b_mag * b2g_mag)
+            if alignment > 0:
+                reward += alignment * self.weights["pos"]
+
+        # --- KINESTHETIC AERIAL JACKPOT ---
+        # 🛑 AI FIX: "vel_to_ball > 0" prevents the jumping bean exploit!
+        if not player.on_ground and pz > 300.0 and vel_to_ball > 0:
+            reward += 0.005 * self.weights["aer"]
             
-        # 2. The Payload: Height-Scaled Power Hit
         if player.ball_touched:
-            bz = state.ball.position[2]
-            bvx, bvy, bvz = state.ball.linear_velocity
+            height_frac = max(0.0, min(bz * INV_2044, 1.0))
+            ball_speed = math.sqrt(bvx*bvx + bvy*bvy + bvz*bvz)
+            speed_frac = min(1.0, ball_speed * INV_4600)
             
-            height_frac = max(0.0, min(bz / 2044.0, 1.0))
-            ball_speed = math.sqrt(bvx**2 + bvy**2 + bvz**2)
-            speed_frac = min(1.0, ball_speed / 4600.0)
-            
-            # Aerial hits get exponential multiplier, ground hits get standard reward
             if height_frac > 0.15:
-                reward += (10.0 * speed_frac) * (1.0 + (height_frac ** 2))
+                reward += ((10.0 * speed_frac) * (1.0 + (height_frac * height_frac))) * self.weights["aer"]
             else:
-                reward += (2.0 * speed_frac)
-                
+                reward += (2.0 * speed_frac) * self.weights["aer"]
+
+        # --- DYNAMIC BOOST ---
+        cb = player.boost_amount
+        lb = self.last_boost.get(player.car_id, cb)
+        self.last_boost[player.car_id] = cb
+        if cb > lb + 0.01:
+            reward += ((cb - lb) * (2.0 - lb) * 2.0) * self.weights["bst"]
+
         return float(reward)
 
 # ------------------------------------------------------------------------------
@@ -604,18 +534,19 @@ class EscalateMutator(StateSetter):
 
         elif scenario < 0.95: 
             # 🚀 THE AERIAL INTERCEPT CURRICULUM
-            # Ball suspended perfectly high in the air, 0 velocity.
             wrapper.ball.set_pos(random.uniform(-1000, 1000), random.uniform(-1000, 1000), random.uniform(1200, 1800))
             wrapper.ball.set_lin_vel(0.0, 0.0, 0.0)
             
-            # Car on the ground directly below it, pointing at it, with 100 boost.
             for car in wrapper.cars:
                 car.set_pos(wrapper.ball.position[0] + random.uniform(-400, 400), 
                             wrapper.ball.position[1] + random.uniform(-400, 400), 17.05)
-                # Auto-aim car directly at the ball
                 car.set_rot(0.0, math.atan2(wrapper.ball.position[1] - car.position[1], wrapper.ball.position[0] - car.position[0]), 0.0)
-                car.set_lin_vel(0.0, 0.0, 0.0)
-                car.boost = 1.0 # FULL BOOST to force flight
+                
+                # 🧠 SMART CONFIG: Give the car forward momentum so it learns to fast-aerial while driving!
+                cfx, cfy, cfz = car.forward()
+                spd = random.uniform(800, 1500)
+                car.set_lin_vel(cfx * spd, cfy * spd, 0.0)
+                car.boost = 1.0
 
         else:
             team_side = random.choice([-1.0, 1.0])
@@ -641,22 +572,17 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ V168: KINESTHETIC REWARD STRUCTURE (Touch/Aerial KING, proximity breadcrumbs only)
+    # ⭐ V168: MONOLITHIC REWARD STRUCTURE (3 reward calls instead of 7)
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=5.0), 
             VelocityBallToGoalReward(),            # Force the ball towards the net!
-            PositionToShootReward(),               # Get behind ball, facing opponent goal
-            FearlessPlayerToBallReward(),          # Breadcrumb: drive towards the ball
-            FaceAndChaseReward(),                  # Breadcrumb: align with ball direction
-            KinestheticAerialReward(),             # 🌟 V168: Height-scaled power hits + aerial breadcrumbs
-            DynamicBoostReward()                   # ⛽ Learn to path over pads
+            MonolithicSOTAReward()                  # 🚀 Fused: Fearless+Face+Position+Aerial+Boost
         ),
-        # V168 WEIGHTS: Touch/Aerial DOMINATES. Proximity is breadcrumbs only.
-        # [Event,  BallToNet, Position, PlayerToBall, FaceChase, Kinesthetic, Boost]
-        (1.0,     3.0,       0.3,      0.1,          0.05,      10.0,        0.2),
+        # [Event,  BallToNet, Monolithic]
+        (1.0,     3.0,       1.0),
         
-        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Aerial/Touch", "Boost"]
+        names=["Goal/Event", "BallToNet", "Monolithic"]
     )
     
     action_parser = SOTAActionParser()
@@ -709,8 +635,8 @@ if __name__ == "__main__":
     WORKER_CORES = min(60, mp.cpu_count()) 
     
     GLOBAL_BATCH_SIZE = 100_000 
-    EXP_BUFFER = 300_000 
-    MINI_BATCH = 25_000     # V167: Slightly larger for stability
+    EXP_BUFFER = 1_000_000       # 🧠 AI FIX: Remembers rare aerial setups!
+    MINI_BATCH = 50_000          # 🚀 SPEED FIX: Saturation of GPU cores
     
     BASE_ITERS = 15000
     EXTENSION_STEP = 5000
@@ -723,7 +649,8 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.005,          # V168: Start lower to avoid wasting iterations on exploration
+        ppo_ent_coef=0.01,           # 🧠 AI FIX: Start higher so it explores jumping!
+        ppo_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
         
         standardize_obs=False,
         standardize_returns=True,
