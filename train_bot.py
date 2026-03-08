@@ -102,13 +102,18 @@ def ensure_collision_meshes():
         return
 
     if os.path.abspath(source_dir) == os.path.abspath(target_dir):
-        return 
+        return
         
     os.makedirs(target_dir, exist_ok=True)
-    for f in os.listdir(source_dir):
-        if f.endswith(".cmf"):
-            try: shutil.copy(os.path.join(source_dir, f), os.path.join(target_dir, f))
-            except Exception: pass
+    
+    # Copy meshes in correct numerical order (mesh_0, mesh_1, ... mesh_15)
+    for i in range(16):
+        fname = f"mesh_{i}.cmf"
+        src = os.path.join(source_dir, fname)
+        dst = os.path.join(target_dir, fname)
+        if os.path.exists(src):
+            shutil.copy(src, dst)
+    
     print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
 
 class ReturnTrackerWrapper(gym.Wrapper):
@@ -670,20 +675,20 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ V167: GROUND-FIRST REWARD STRUCTURE (No aerial until bot can drive and score)
+    # ⭐ V168: TOUCH-FIRST REWARD STRUCTURE (Touching ball is 100x more valuable than proximity)
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=100.0, concede=-100.0, shot=15.0, save=30.0, demo=5.0, touch=3.0), 
-            VelocityBallToGoalReward(),            # #1 PRIORITY: Force the ball towards the net!
+            EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=5.0), 
+            VelocityBallToGoalReward(),            # Force the ball towards the net!
             PositionToShootReward(),               # Get behind ball, facing opponent goal
-            FearlessPlayerToBallReward(),          # Drive towards the ball with speed
-            FaceAndChaseReward(),                  # Align car forward vector with ball direction
-            TouchBallReward(),                     # ⭐ NEW: Reward strong ball hits over weak taps
+            FearlessPlayerToBallReward(),          # Breadcrumb: drive towards the ball
+            FaceAndChaseReward(),                  # Breadcrumb: align with ball direction
+            TouchBallReward(),                     # ⭐ V168 KING: Strong ball hits >> everything
             DynamicBoostReward()                   # ⛽ Learn to path over pads
         ),
-        # V167 WEIGHTS: BallToNet dominates, events are massive, no aerial distraction
+        # V168 WEIGHTS: Touch DOMINATES. Proximity is breadcrumbs only.
         # [Event,  BallToNet, Position, PlayerToBall, FaceChase, Touch, Boost]
-        (1.0,     5.0,       0.5,      1.0,          0.5,       2.0,   0.3),
+        (1.0,     3.0,       0.3,      0.1,          0.05,      10.0,  0.2),
         
         names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Touch", "Boost"]
     )
@@ -705,7 +710,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V166 MAIN PPO ENGINE
+# 7. SOTA V168 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -716,7 +721,7 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V167)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V168)...")
     
     try:
         temp_env = build_env()
@@ -748,7 +753,7 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.01,
+        ppo_ent_coef=0.005,          # V168: Start lower to avoid wasting iterations on exploration
         
         standardize_obs=False,
         standardize_returns=True,
@@ -884,10 +889,10 @@ if __name__ == "__main__":
             learner.agent.cumulative_timesteps += steps
             
             progress = min(1.0, i / max(1, TOTAL_ITERS))
-            # V167: LR floor 1e-4 (was 1e-5), entropy decays 10x to 0.001 (was 2x to 0.005)
+            # V168: LR floor 1e-4, entropy 0.005→0.0005 (fast convergence, no exploration waste)
             new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
             new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
-            new_ent = 0.01 * (1.0 - 0.9 * progress)         # 0.01 → 0.001
+            new_ent = 0.005 * (1.0 - 0.9 * progress)        # 0.005 → 0.0005
             
             try:
                 if hasattr(learner.ppo_learner, 'optimizer'):
@@ -928,26 +933,16 @@ if __name__ == "__main__":
 
                 print(f"PPO Avg Reward/Ep:    {avg_reward}")
                 
-                # 🛑 THE OMNI-SCANNER for Losses
-                p_loss, v_loss, ent = "N/A", "N/A", "N/A"
+                # 🛑 V168: Direct key extraction from rlgym_ppo's learn() report
+                # Known keys: "Policy Entropy", "Value Function Loss", "Policy Update Magnitude",
+                #              "SB3 Clip Fraction", "Mean KL Divergence", "Cumulative Model Updates"
+                p_update, v_loss, ent, kl_div, clip_frac = "N/A", "N/A", "N/A", "N/A", "N/A"
                 if isinstance(learn_report, dict):
-                    for k, v in learn_report.items():
-                        kl = k.lower()
-                        # V167: Broadened key scanning to fix N/A display bug
-                        if 'loss' in kl and ('policy' in kl or 'ppo' in kl or 'actor' in kl or 'clip' in kl or 'surr' in kl): p_loss = v
-                        elif 'loss' in kl and ('value' in kl or 'critic' in kl or 'vf' in kl): v_loss = v
-                        elif 'entropy' in kl or 'ent' in kl: ent = v
-                        
-                # Deep object scan fallback
-                if p_loss == "N/A": 
-                    for attr in ['policy_loss', '_policy_loss', 'avg_policy_loss', 'clip_loss']:
-                        if hasattr(learner.ppo_learner, attr): p_loss = getattr(learner.ppo_learner, attr)
-                if v_loss == "N/A": 
-                    for attr in ['value_loss', '_value_loss', 'avg_value_loss', 'vf_loss']:
-                        if hasattr(learner.ppo_learner, attr): v_loss = getattr(learner.ppo_learner, attr)
-                if ent == "N/A": 
-                    for attr in ['entropy', '_entropy', 'avg_entropy', 'ent_loss']:
-                        if hasattr(learner.ppo_learner, attr): ent = getattr(learner.ppo_learner, attr)
+                    p_update  = learn_report.get("Policy Update Magnitude", "N/A")
+                    v_loss    = learn_report.get("Value Function Loss", "N/A")
+                    ent       = learn_report.get("Policy Entropy", "N/A")
+                    kl_div    = learn_report.get("Mean KL Divergence", "N/A")
+                    clip_frac = learn_report.get("SB3 Clip Fraction", "N/A")
                 
                 def safe_round_loss(val):
                     if val == "N/A" or val is None: return "N/A"
@@ -958,9 +953,11 @@ if __name__ == "__main__":
                     except:
                         return "N/A"
 
-                print(f"Policy Loss:          {safe_round_loss(p_loss)}")
+                print(f"Policy Update Mag:    {safe_round_loss(p_update)}")
                 print(f"Value Loss (Critic):  {safe_round_loss(v_loss)}")
                 print(f"Entropy:              {safe_round_loss(ent)}")
+                print(f"KL Divergence:        {safe_round_loss(kl_div)}")
+                print(f"Clip Fraction:        {safe_round_loss(clip_frac)}")
                 
                 try:
                     telemetry_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_reward_telemetry_") and f.endswith(".json")]
@@ -990,7 +987,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V167_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V168_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -1015,7 +1012,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V167_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V168_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -1050,8 +1047,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V167_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V167_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V168_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V168_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
