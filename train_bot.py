@@ -540,12 +540,12 @@ class EscalateMutator(StateSetter):
             for car in wrapper.cars:
                 car.set_pos(wrapper.ball.position[0] + random.uniform(-400, 400), 
                             wrapper.ball.position[1] + random.uniform(-400, 400), 17.05)
-                car.set_rot(0.0, math.atan2(wrapper.ball.position[1] - car.position[1], wrapper.ball.position[0] - car.position[0]), 0.0)
+                yaw = math.atan2(wrapper.ball.position[1] - car.position[1], wrapper.ball.position[0] - car.position[0])
+                car.set_rot(0.0, yaw, 0.0)
                 
                 # 🧠 SMART CONFIG: Give the car forward momentum so it learns to fast-aerial while driving!
-                cfx, cfy, cfz = car.forward()
                 spd = random.uniform(800, 1500)
-                car.set_lin_vel(cfx * spd, cfy * spd, 0.0)
+                car.set_lin_vel(math.cos(yaw) * spd, math.sin(yaw) * spd, 0.0)
                 car.boost = 1.0
 
         else:
