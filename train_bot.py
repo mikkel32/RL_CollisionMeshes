@@ -144,8 +144,8 @@ class ReturnTrackerWrapper(gym.Wrapper):
         return step_returns
 
     def _flush_buffer(self, force=False):
-        # 🚀 SPEED FIX: Write to disk every 10,000 episodes instead of 50.
-        if len(self.return_buffer) >= 10000 or (force and len(self.return_buffer) > 0):
+        # 🚀 SPEED FIX: Write to disk every 200 episodes (4x less I/O than 50, but data shows within minutes)
+        if len(self.return_buffer) >= 200 or (force and len(self.return_buffer) > 0):
             try:
                 with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
                     f.write("\n".join(self.return_buffer) + "\n")
@@ -229,8 +229,6 @@ class SOTAActionParser(ActionParser):
                             for boost in [0.0, 1.0]:
                                 for handbrake in [0.0, 1.0]:
                                     # 🛑 SMART PRUNING:
-                                    if pitch != 0 and throttle == -1.0: 
-                                        continue # Reverse throttle in air is useless
                                     if boost == 1 and throttle == -1.0:
                                         continue # Boosting while reversing is contradictory
                                     
@@ -396,11 +394,11 @@ class TrackedCombinedReward(RewardFunction):
             total_reward += r
             
         self.steps += 1
-        # 🚀 SPEED FIX: Dump JSON every 500,000 steps instead of 5,000.
-        if self.steps % 500000 == 0:
+        # 🚀 SPEED FIX: Dump JSON every 50,000 steps (10x less I/O than 5K, fresh enough for reporting)
+        if self.steps % 50000 == 0:
             try:
                 os.makedirs("/tmp", exist_ok=True)
-                avg_stats = {k: v/500000 for k, v in self.stats.items()}
+                avg_stats = {k: v/50000 for k, v in self.stats.items()}
                 with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
                     json.dump(avg_stats, f)
                 for k in self.names:
@@ -465,7 +463,10 @@ class MonolithicSOTAReward(RewardFunction):
             speed_frac = min(1.0, ball_speed * INV_4600)
             
             if height_frac > 0.15:
-                reward += ((10.0 * speed_frac) * (1.0 + (height_frac * height_frac))) * self.weights["aer"]
+                if player.on_ground:  # 🛑 PENALIZE WALL-FARMING: touching ball high while on wall = ground reward only
+                    reward += (2.0 * speed_frac) * self.weights["aer"]
+                else:  # ✅ TRUE AERIAL JACKPOT
+                    reward += ((10.0 * speed_frac) * (1.0 + (height_frac * height_frac))) * self.weights["aer"]
             else:
                 reward += (2.0 * speed_frac) * self.weights["aer"]
 
@@ -632,11 +633,11 @@ if __name__ == "__main__":
         print(f"🚨 FATAL: build_env() crashed!\n{traceback.format_exc()}")
         sys.exit(1)
 
-    WORKER_CORES = min(60, mp.cpu_count()) 
+    WORKER_CORES = 36  # 🚀 Leave 4 physical cores for PyTorch GPU feeding + OS
     
-    GLOBAL_BATCH_SIZE = 100_000 
-    EXP_BUFFER = 1_000_000       # 🧠 AI FIX: Remembers rare aerial setups!
-    MINI_BATCH = 50_000          # 🚀 SPEED FIX: Saturation of GPU cores
+    GLOBAL_BATCH_SIZE = 65_536       # 🚀 Power of 2 tensor size (faster VRAM alloc)
+    EXP_BUFFER = 655_360             # 🧠 10x batch size for rare aerial memory
+    MINI_BATCH = 32_768              # 🚀 Exactly 2 splits for massive GPU saturation
     
     BASE_ITERS = 15000
     EXTENSION_STEP = 5000
@@ -649,19 +650,19 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.01,           # 🧠 AI FIX: Start higher so it explores jumping!
+        ppo_ent_coef=0.015,          # 🧠 AI FIX: Forces early jump exploration (decays to 0.0015)
         gae_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
         
         standardize_obs=False,
         standardize_returns=True,
         
-        policy_lr=5e-4,        # V167: 2.5x stronger to push entropy down faster
-        critic_lr=5e-4,        # V167: Matched to policy for stability
+        policy_lr=5e-4,
+        critic_lr=5e-4,
         
-        ppo_epochs=3,          # V167: Reduced from 4 to prevent overfitting on stale data
+        ppo_epochs=2,              # 🚀 SPEED FIX: 33% less backprop per iteration
         
-        policy_layer_sizes=(256, 256, 256),    # V167: Smaller = faster convergence with 351 actions           
-        critic_layer_sizes=(256, 256, 256),      
+        policy_layer_sizes=(256, 256),         # 🚀 SPEED FIX: 33% faster forward/backward (2 layers sufficient for 92-dim 1v1)
+        critic_layer_sizes=(256, 256, 256),    # Keep critic deeper for value estimation
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
@@ -773,9 +774,9 @@ if __name__ == "__main__":
     try:
         import torch._dynamo
         torch._dynamo.config.suppress_errors = True
-        learner.ppo_learner.policy = torch.compile(learner.ppo_learner.policy, mode="reduce-overhead")
-        learner.ppo_learner.value_net = torch.compile(learner.ppo_learner.value_net, mode="reduce-overhead")
-        print("✅ PyTorch 2.0 Compiler Enabled!")
+        learner.ppo_learner.policy = torch.compile(learner.ppo_learner.policy, mode="max-autotune")
+        learner.ppo_learner.value_net = torch.compile(learner.ppo_learner.value_net, mode="max-autotune")
+        print("✅ PyTorch 2.0 Compiler Enabled (max-autotune)!")
     except Exception as e:
         print(f"⚠️ torch.compile not available: {e}")
 
@@ -799,7 +800,7 @@ if __name__ == "__main__":
             # V168: LR floor 1e-4, entropy 0.005→0.0005 (fast convergence, no exploration waste)
             new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
             new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
-            new_ent = 0.005 * (1.0 - 0.9 * progress)        # 0.005 → 0.0005
+            new_ent = 0.015 * (1.0 - 0.9 * progress)        # 0.015 → 0.0015
             
             try:
                 if hasattr(learner.ppo_learner, 'optimizer'):
