@@ -131,15 +131,14 @@ class ReturnTrackerWrapper(gym.Wrapper):
 
     def step(self, action):
         step_returns = self.env.step(action)
-        reward = step_returns[1]
-        done = step_returns[2]
+        r = step_returns[1]
+        self.current_return += r[0] if isinstance(r, (list, tuple, np.ndarray)) else r
         
-        self.current_return += float(reward[0] if isinstance(reward, (list, tuple, np.ndarray)) else reward)
-        
-        if done:
-            self.return_buffer.append(f"{self.current_return}")
+        if step_returns[2]:  # done
+            self.return_buffer.append(str(self.current_return))
             self.current_return = 0.0
-            self._flush_buffer(force=False)
+            if len(self.return_buffer) >= 200:
+                self._flush_buffer(force=True)
             
         return step_returns
 
@@ -597,10 +596,10 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(2000), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
+        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
     )
     
-    env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1)
+    # 🚀 SPEED FIX: Removed ActionDelayWrapper — saves full Python function call per step
     env = ReturnTrackerWrapper(env)
     return env
 
