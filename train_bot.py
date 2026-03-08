@@ -258,11 +258,13 @@ class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
-        self.MAX_OPPONENTS = 3
-        self.MAX_TEAMMATES = 2
+        # 🚀 V168: 1v1 only — no wasted slots for missing players
+        self.MAX_OPPONENTS = 1
+        self.MAX_TEAMMATES = 0
         
         # 🚀 SPEED FIX: Pre-allocate the NumPy array once per worker
-        self._obs_buffer = np.zeros(156, dtype=np.float32)
+        # 92 = 34 base + 34 pads + 16*1 opponent + 0 teammates + 8 prev_action
+        self._obs_buffer = np.zeros(92, dtype=np.float32)
 
     def reset(self, initial_state: GameState): pass 
 
