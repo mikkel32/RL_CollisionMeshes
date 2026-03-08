@@ -650,7 +650,7 @@ if __name__ == "__main__":
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
         ppo_ent_coef=0.01,           # 🧠 AI FIX: Start higher so it explores jumping!
-        ppo_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
+        gae_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
         
         standardize_obs=False,
         standardize_returns=True,
