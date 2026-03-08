@@ -489,9 +489,11 @@ class MonolithicSOTAReward(RewardFunction):
 # ------------------------------------------------------------------------------
 class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
+        # ✨ PHASE 2: 90% HIGH MECHANICS SCENARIOS ✨
         scenario = random.random()
         
-        if scenario < 0.30:
+        if scenario < 0.10:
+            # 10% Grounded Kickoff (Keep the fundamentals warm)
             DefaultState().reset(wrapper)
                 
         elif scenario < 0.50:
@@ -578,15 +580,15 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ V168: MONOLITHIC REWARD STRUCTURE (3 reward calls instead of 7)
+    # ⭐ V168 PHASE 2: FINE-TUNING REWARD STRUCTURE
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=10.0), 
+            EventReward(goal=200.0, concede=-100.0, shot=25.0, save=80.0, demo=5.0, touch=5.0), # Touch tapered, Save massively buffed
             VelocityBallToGoalReward(),            # Force the ball towards the net!
-            MonolithicSOTAReward()                  # 🚀 Fused: Fearless+Face+Position+Aerial+Boost
+            MonolithicSOTAReward()                 # 🚀 Fused: Fearless+Face+Position+Aerial+Boost
         ),
         # [Event,  BallToNet, Monolithic]
-        (1.0,     1.5,       1.0),    # 🛑 BallToNet 3.0→1.5 (reduces early-touch penalty trauma)
+        (1.0,     2.5,       0.5),    # 🛑 Monolithic tapered down to 0.5, BallToNet buffed to 2.5
         
         names=["Goal/Event", "BallToNet", "Monolithic"]
     )
@@ -640,12 +642,12 @@ if __name__ == "__main__":
 
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
-    GLOBAL_BATCH_SIZE = 32_768       # 🚀 Fast turnaround (updates brain 2x faster in wall-clock)
-    EXP_BUFFER = 163_840             # 🧠 5x batch = optimal diversity ceiling (KL stays < 0.05)
-    MINI_BATCH = 16_384              # 🚀 Exactly 2 splits for Ampere GPUs
+    GLOBAL_BATCH_SIZE = 32_768       
+    EXP_BUFFER = 327_680             # 🧠 PHASE 2: 10x batch = Massive diversity ceiling for Self-Play
+    MINI_BATCH = 16_384              
     
     BASE_ITERS = 15000
-    EXTENSION_STEP = 5000
+    EXTENSION_STEP = 45000
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
@@ -655,16 +657,16 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.01,           # 🧠 AI FIX: 0.01 * ln(540) = 0.063 — below reward signal so policy actually learns
-        gae_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
+        ppo_ent_coef=0.005,          # 🧠 PHASE 2: Tapering entropy down, policy commits to aerials
+        gae_gamma=0.995,             
         
         standardize_obs=False,
         standardize_returns=True,
         
-        policy_lr=5e-4,
-        critic_lr=5e-4,
+        policy_lr=1e-4,              # 📉 PHASE 2: 75% LR reduction for precise mechanical carving
+        critic_lr=1e-4,
         
-        ppo_epochs=3,              # 🧠 AI FIX: More gradient passes → KL/clip registers properly
+        ppo_epochs=5,                # 📈 PHASE 2: More gradient passes to extract dense value from rare plays
         
         policy_layer_sizes=(256, 256),         # 2 layers sufficient for 92-dim 1v1
         critic_layer_sizes=(256, 256, 256),    # 🧠 AI FIX: 3 layers needed for accurate value estimation
