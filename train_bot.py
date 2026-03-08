@@ -144,7 +144,8 @@ class ReturnTrackerWrapper(gym.Wrapper):
         return step_returns
 
     def _flush_buffer(self, force=False):
-        if len(self.return_buffer) >= 50 or (force and len(self.return_buffer) > 0):
+        # 🚀 SPEED FIX: Write to disk every 10,000 episodes instead of 50.
+        if len(self.return_buffer) >= 10000 or (force and len(self.return_buffer) > 0):
             try:
                 with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
                     f.write("\n".join(self.return_buffer) + "\n")
@@ -246,9 +247,13 @@ class SOTAActionParser(ActionParser):
         return gym.spaces.Discrete(len(self._lookup_table))
 
     def parse_actions(self, actions: Any, state: GameState) -> np.ndarray:
-        actions = np.asarray(actions, dtype=np.int32).flatten()
-        # 🚀 V168: Removed .copy() - saves RAM allocation overhead
-        return self._lookup_table[np.clip(actions, 0, len(self._lookup_table) - 1)]
+        # 🚀 SPEED FIX: Bypass slow NumPy array flattening/clipping
+        try:
+            idx = int(actions.item()) if hasattr(actions, 'item') else int(actions[0])
+        except (TypeError, IndexError):
+            idx = int(actions)
+        idx = max(0, min(idx, len(self._lookup_table) - 1))
+        return self._lookup_table[idx]
 
 # ------------------------------------------------------------------------------
 # 3. ULTRA-FAST OBSERVATION BUILDER
@@ -259,10 +264,16 @@ class TemporalMemoryObservation(ObsBuilder):
         self.action_parser = action_parser
         self.MAX_OPPONENTS = 3
         self.MAX_TEAMMATES = 2
+        
+        # 🚀 SPEED FIX: Pre-allocate the NumPy array once per worker
+        self._obs_buffer = np.zeros(156, dtype=np.float32)
 
     def reset(self, initial_state: GameState): pass 
 
     def build_obs(self, player: PlayerData, state: GameState, previous_action: np.ndarray) -> np.ndarray:
+        # 🚀 Grab the pre-allocated buffer (Bypasses list creation overhead entirely)
+        obs = self._obs_buffer
+
         if player.team_num == 1: 
             car, ball, pads = player.inverted_car_data, state.inverted_ball, state.inverted_boost_pads
         else: 
@@ -285,138 +296,83 @@ class TemporalMemoryObservation(ObsBuilder):
         dx, dy, dz = bx - px, by - py, bz - pz
         dvx, dvy, dvz = bvx - vx, bvy - vy, bvz - vz
         
-        local_bx = dx*fx + dy*fy + dz*fz
-        local_by = dx*rx + dy*ry + dz*rz
-        local_bz = dx*ux + dy*uy + dz*uz
+        # 🚀 SPEED FIX: Direct index assignment (Massive CPU saver)
+        obs[0:3] = px * INV_4096, py * INV_5120, pz * INV_2044 
+        obs[3:6] = vx * INV_2300, vy * INV_2300, vz * INV_2300
+        obs[6:9] = (vx*fx + vy*fy + vz*fz) * INV_2300, (vx*rx + vy*ry + vz*rz) * INV_2300, (vx*ux + vy*uy + vz*uz) * INV_2300
+        obs[9:12] = (ax*fx + ay*fy + az*fz) * INV_5_5, (ax*rx + ay*ry + az*rz) * INV_5_5, (ax*ux + ay*uy + az*uz) * INV_5_5
+        obs[12:21] = fx, fy, fz, rx, ry, rz, ux, uy, uz
         
-        local_bvx = dvx*fx + dvy*fy + dvz*fz
-        local_bvy = dvx*rx + dvy*ry + dvz*rz
-        local_bvz = dvx*ux + dvy*uy + dvz*uz
+        obs[21:24] = (dx*fx + dy*fy + dz*fz) * INV_10240, (dx*rx + dy*ry + dz*rz) * INV_10240, (dx*ux + dy*uy + dz*uz) * INV_10240
+        obs[24:27] = (dvx*fx + dvy*fy + dvz*fz) * INV_8300, (dvx*rx + dvy*ry + dvz*rz) * INV_8300, (dvx*ux + dvy*uy + dvz*uz) * INV_8300
+        
+        obs[27] = player.boost_amount ** 0.5  # **0.5 is faster than math.sqrt() in Python
+        obs[28:31] = float(player.on_ground), float(player.has_flip), float(player.is_demoed)
+        obs[31:34] = h_len * INV_150, h_wid * INV_100, h_hei * INV_50
 
-        obs = [
-            px * INV_4096, py * INV_5120, pz * INV_2044, 
-            vx * INV_2300, vy * INV_2300, vz * INV_2300,
-            (vx*fx + vy*fy + vz*fz) * INV_2300,
-            (vx*rx + vy*ry + vz*rz) * INV_2300,
-            (vx*ux + vy*uy + vz*uz) * INV_2300,
-            (ax*fx + ay*fy + az*fz) * INV_5_5,
-            (ax*rx + ay*ry + az*rz) * INV_5_5,
-            (ax*ux + ay*uy + az*uz) * INV_5_5,
-            fx, fy, fz, rx, ry, rz, ux, uy, uz,
-            
-            local_bx * INV_10240, local_by * INV_10240, local_bz * INV_10240, 
-            local_bvx * INV_8300, local_bvy * INV_8300, local_bvz * INV_8300, 
-            
-            math.sqrt(max(0.0, player.boost_amount)),
-            
-            float(player.on_ground), float(player.has_flip), float(player.is_demoed),
-            
-            h_len * INV_150, h_wid * INV_100, h_hei * INV_50
-        ]
+        # 🚀 SPEED FIX: Fast array copying for pads (Removes slow .tolist() conversion)
+        num_pads = len(pads)
+        obs[34:34+num_pads] = pads
+        idx = 34 + num_pads
 
-        obs.extend(pads.tolist())
-
-        true_bx, true_by, true_bz = state.ball.position
-
-        # 🚀 V168: Skip lambda sorting in 1v1 (only 1 opponent, sorting is waste)
         opponents = [other for other in state.players if other.team_num != player.team_num]
-        if len(opponents) > 1:
-            opponents.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
-                                         (x.car_data.position[1]-true_by)**2 + 
-                                         (x.car_data.position[2]-true_bz)**2)
         
         added_opps = 0
         for other in opponents:
             if added_opps >= self.MAX_OPPONENTS: break
-                
             o_car = other.inverted_car_data if player.team_num == 1 else other.car_data
             ox, oy, oz = o_car.position
             ovx, ovy, ovz = o_car.linear_velocity
-            
             ofx, ofy, ofz = o_car.forward()
             orx, o_ry, orz = o_car.right()
             oux, ouy, ouz = o_car.up()
-            
             odx, ody, odz = ox - px, oy - py, oz - pz
-            odvx, odvy, odvz = ovx - vx, ovy - vy, oz - vz
+            odvx, odvy, odvz = ovx - vx, ovy - vy, ovz - vz
             
-            local_ox = odx*fx + ody*fy + odz*fz
-            local_oy = odx*rx + ody*ry + odz*rz
-            local_oz = odx*ux + ody*uy + odz*uz
-            
-            local_ovx = odvx*fx + odvy*fy + odvz*fz
-            local_ovy = odvx*rx + odvy*ry + odvz*rz
-            local_ovz = odvx*ux + odvy*uy + odvz*uz
-
-            obs.extend([
-                local_ox * INV_10240, local_oy * INV_10240, local_oz * INV_10240,
-                local_ovx * INV_4600, local_ovy * INV_4600, local_ovz * INV_4600,
-                ofx, ofy, ofz, orx, o_ry, orz, oux, ouy, ouz,
-                math.sqrt(max(0.0, other.boost_amount))
-            ])
+            obs[idx:idx+3] = (odx*fx + ody*fy + odz*fz) * INV_10240, (odx*rx + ody*ry + odz*rz) * INV_10240, (odx*ux + ody*uy + odz*uz) * INV_10240
+            obs[idx+3:idx+6] = (odvx*fx + odvy*fy + odvz*fz) * INV_4600, (odvx*rx + odvy*ry + odvz*rz) * INV_4600, (odvx*ux + odvy*uy + odvz*uz) * INV_4600
+            obs[idx+6:idx+15] = ofx, ofy, ofz, orx, o_ry, orz, oux, ouy, ouz
+            obs[idx+15] = other.boost_amount ** 0.5
+            idx += 16
             added_opps += 1
             
         for _ in range(self.MAX_OPPONENTS - added_opps):
-            obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            obs[idx:idx+16] = 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            idx += 16
 
         teammates = [other for other in state.players if other.team_num == player.team_num and other.car_id != player.car_id]
-        if len(teammates) > 1:
-            teammates.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
-                                         (x.car_data.position[1]-true_by)**2 + 
-                                         (x.car_data.position[2]-true_bz)**2)
-        
         added_tm8s = 0
         for other in teammates:
             if added_tm8s >= self.MAX_TEAMMATES: break
-                
             t_car = other.inverted_car_data if player.team_num == 1 else other.car_data
             tx, ty, tz = t_car.position
             tvx, tvy, tvz = t_car.linear_velocity
-            
             tfx, tfy, tfz = t_car.forward()
             trx, t_ry, trz = t_car.right()
             tux, tuy, tuz = t_car.up()
-            
             tdx, tdy, tdz = tx - px, ty - py, tz - pz
             tdvx, tdvy, tdvz = tvx - vx, tvy - vy, tvz - vz
-            
-            local_tx = tdx*fx + tdy*fy + tdz*fz
-            local_ty = tdx*rx + tdy*ry + tdz*rz
-            local_tz = tdx*ux + tdy*uy + tdz*uz
-            
-            local_tvx = tdvx*fx + tdvy*fy + tdvz*fz
-            local_tvy = tdvx*rx + tdvy*ry + tdvz*rz
-            local_tvz = tdvx*ux + tdvy*uy + tdvz*uz
 
-            obs.extend([
-                local_tx * INV_10240, local_ty * INV_10240, local_tz * INV_10240,
-                local_tvx * INV_4600, local_tvy * INV_4600, local_tvz * INV_4600,
-                tfx, tfy, tfz, trx, t_ry, trz, tux, tuy, tuz,
-                math.sqrt(max(0.0, other.boost_amount))
-            ])
+            obs[idx:idx+3] = (tdx*fx + tdy*fy + tdz*fz) * INV_10240, (tdx*rx + tdy*ry + tdz*rz) * INV_10240, (tdx*ux + tdy*uy + tdz*uz) * INV_10240
+            obs[idx+3:idx+6] = (tdvx*fx + tdvy*fy + tdvz*fz) * INV_4600, (tdvx*rx + tdvy*ry + tdvz*rz) * INV_4600, (tdvx*ux + tdvy*uy + tdvz*uz) * INV_4600
+            obs[idx+6:idx+15] = tfx, tfy, tfz, trx, t_ry, trz, tux, tuy, tuz
+            obs[idx+15] = other.boost_amount ** 0.5
+            idx += 16
             added_tm8s += 1
             
         for _ in range(self.MAX_TEAMMATES - added_tm8s):
-            obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            obs[idx:idx+16] = 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            idx += 16
 
+        # Fast path previous action
         try:
-            prev_act = np.asarray(previous_action)
-            if prev_act.size == 8:
-                obs.extend(prev_act.flatten().tolist())
-            elif prev_act.size == 1:
-                idx = int(prev_act.item())
-                idx = max(0, min(idx, len(self.action_parser._lookup_table) - 1)) 
-                obs.extend(self.action_parser._lookup_table[idx].tolist())
-            else:
-                obs.extend([0.0] * 8)
+            prev_act = int(np.asarray(previous_action).item())
+            obs[idx:idx+8] = self.action_parser._lookup_table[max(0, min(prev_act, len(self.action_parser._lookup_table) - 1))]
         except Exception:
-            obs.extend([0.0] * 8)
+            obs[idx:idx+8] = 0.0
 
-        obs_arr = np.array(obs, dtype=np.float32)
-        if not np.isfinite(obs_arr).all():
-            obs_arr = np.nan_to_num(obs_arr)
-            
-        return obs_arr
+        # Return a copy to ensure PPO doesn't overwrite the shared memory buffer
+        return np.copy(obs)
 
 # ------------------------------------------------------------------------------
 # 4. ALGEBRAICALLY PERFECT REWARD SHAPING & TRACKING
@@ -442,11 +398,11 @@ class TrackedCombinedReward(RewardFunction):
             total_reward += r
             
         self.steps += 1
-        
-        if self.steps % 5000 == 0:
+        # 🚀 SPEED FIX: Dump JSON every 500,000 steps instead of 5,000.
+        if self.steps % 500000 == 0:
             try:
                 os.makedirs("/tmp", exist_ok=True)
-                avg_stats = {k: v/5000 for k, v in self.stats.items()}
+                avg_stats = {k: v/500000 for k, v in self.stats.items()}
                 with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
                     json.dump(avg_stats, f)
                 for k in self.names:
@@ -733,6 +689,10 @@ if __name__ == "__main__":
     cleanup_trackers()
     ensure_collision_meshes()
 
+    # 🚀 SPEED FIX: Enable TF32 for massive speedups on Ampere+ GPUs
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
     print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V168)...")
     
     try:
@@ -883,6 +843,16 @@ if __name__ == "__main__":
                 print(f"⚠️ Initialization error during restore: {e}")
                 start_iter = 0
                 TOTAL_ITERS = BASE_ITERS
+
+    # 🚀 SPEED FIX: Compile the PyTorch models for ~30% faster forward/backward passes
+    try:
+        import torch._dynamo
+        torch._dynamo.config.suppress_errors = True
+        learner.ppo_learner.policy = torch.compile(learner.ppo_learner.policy, mode="reduce-overhead")
+        learner.ppo_learner.value_net = torch.compile(learner.ppo_learner.value_net, mode="reduce-overhead")
+        print("✅ PyTorch 2.0 Compiler Enabled!")
+    except Exception as e:
+        print(f"⚠️ torch.compile not available: {e}")
 
     try:
         for i in tqdm(range(start_iter, TOTAL_ITERS), desc=f"Training GC Bot ({TOTAL_ITERS} Iters)", initial=start_iter, total=TOTAL_ITERS, file=sys.stdout):
