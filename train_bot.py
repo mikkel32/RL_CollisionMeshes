@@ -259,6 +259,8 @@ class TemporalMemoryObservation(ObsBuilder):
         # 🚀 V168: 1v1 only — no wasted slots for missing players
         self.MAX_OPPONENTS = 1
         self.MAX_TEAMMATES = 0
+        self._lookup_len = len(action_parser._lookup_table)
+        self._lookup_ref = action_parser._lookup_table
         
         # 🚀 SPEED FIX: Pre-allocate the NumPy array once per worker
         # 92 = 34 base + 34 pads + 16*1 opponent + 0 teammates + 8 prev_action
@@ -285,9 +287,10 @@ class TemporalMemoryObservation(ObsBuilder):
         ux, uy, uz = car.up()
         rx, ry, rz = car.right() 
 
-        h_len = player.car_data.hitbox_size[0] if hasattr(player.car_data, 'hitbox_size') else 118.01 
-        h_wid = player.car_data.hitbox_size[1] if hasattr(player.car_data, 'hitbox_size') else 84.20
-        h_hei = player.car_data.hitbox_size[2] if hasattr(player.car_data, 'hitbox_size') else 36.16
+        # 🚀 SPEED FIX: Use default hitbox constants (no hasattr check per tick)
+        h_len = 118.01
+        h_wid = 84.20
+        h_hei = 36.16
 
         dx, dy, dz = bx - px, by - py, bz - pz
         dvx, dvy, dvz = bvx - vx, bvy - vy, bvz - vz
@@ -303,7 +306,7 @@ class TemporalMemoryObservation(ObsBuilder):
         obs[24:27] = (dvx*fx + dvy*fy + dvz*fz) * INV_8300, (dvx*rx + dvy*ry + dvz*rz) * INV_8300, (dvx*ux + dvy*uy + dvz*uz) * INV_8300
         
         obs[27] = math.sqrt(max(0.0, player.boost_amount))
-        obs[28:31] = float(player.on_ground), float(player.has_flip), float(player.is_demoed)
+        obs[28:31] = player.on_ground, player.has_flip, player.is_demoed
         obs[31:34] = h_len * INV_150, h_wid * INV_100, h_hei * INV_50
 
         # 🚀 SPEED FIX: Fast array copying for pads (Removes slow .tolist() conversion)
@@ -360,15 +363,15 @@ class TemporalMemoryObservation(ObsBuilder):
             obs[idx:idx+16] = 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             idx += 16
 
-        # Fast path previous action
-        try:
-            prev_act = int(np.asarray(previous_action).item())
-            obs[idx:idx+8] = self.action_parser._lookup_table[max(0, min(prev_act, len(self.action_parser._lookup_table) - 1))]
-        except Exception:
-            obs[idx:idx+8] = 0.0
+        # 🚀 SPEED FIX: Direct integer path, no try/except overhead per tick
+        if isinstance(previous_action, np.ndarray):
+            pa = previous_action.flat[0]
+        else:
+            pa = int(previous_action) if previous_action is not None else 0
+        pa = max(0, min(int(pa), self._lookup_len - 1))
+        obs[idx:idx+8] = self._lookup_ref[pa]
 
-        # Return a copy to ensure PPO doesn't overwrite the shared memory buffer
-        return np.copy(obs)
+        return obs.copy()
 
 # ------------------------------------------------------------------------------
 # 4. ALGEBRAICALLY PERFECT REWARD SHAPING & TRACKING
@@ -394,18 +397,17 @@ class TrackedCombinedReward(RewardFunction):
             total_reward += r
             
         self.steps += 1
-        # 🚀 SPEED FIX: Dump JSON every 50,000 steps (10x less I/O than 5K, fresh enough for reporting)
-        if self.steps % 50000 == 0:
+        # 🚀 SPEED FIX: Dump JSON every 100,000 steps
+        if self.steps % 100000 == 0:
             try:
-                os.makedirs("/tmp", exist_ok=True)
-                avg_stats = {k: v/50000 for k, v in self.stats.items()}
+                avg_stats = {k: v/100000 for k, v in self.stats.items()}
                 with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
                     json.dump(avg_stats, f)
                 for k in self.names:
                     self.stats[k] = 0.0
             except Exception: pass
                 
-        return float(total_reward)
+        return total_reward
 
 
 # 🚀 V168: MONOLITHIC GOD-REWARD (Fuses 5 spatial/aerial rewards into one O(1) pass)
@@ -796,41 +798,40 @@ if __name__ == "__main__":
             
             learner.agent.cumulative_timesteps += steps
             
-            progress = min(1.0, i / max(1, TOTAL_ITERS))
-            # V168: LR floor 1e-4, entropy 0.005→0.0005 (fast convergence, no exploration waste)
-            new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
-            new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)   # 5e-4 → 1e-4
-            new_ent = 0.015 * (1.0 - 0.9 * progress)        # 0.015 → 0.0015
-            
-            try:
-                if hasattr(learner.ppo_learner, 'optimizer'):
-                    for param_group in learner.ppo_learner.optimizer.param_groups: 
-                        param_group['lr'] = new_policy_lr
-                else:
-                    for param_group in learner.ppo_learner.policy_optimizer.param_groups: param_group['lr'] = new_policy_lr
-                    for param_group in learner.ppo_learner.value_optimizer.param_groups: param_group['lr'] = new_critic_lr
-            except Exception:
-                pass
-            
-            learner.ppo_ent_coef = new_ent
-            learner.ppo_learner.ent_coef = new_ent
-            
-            # 🛑 FAILSAFE METRIC EXTRACTOR: Read from temp files written natively by the wrapper
-            try:
-                return_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_returns_")]
-                for rf in return_files:
-                    try:
-                        with open(rf, "r") as f:
-                            lines = f.readlines()
-                            for line in lines:
-                                if line.strip():
-                                    ep_returns_queue.append(float(line.strip()))
-                        # Clear the file so it doesn't scale infinitely
-                        open(rf, 'w').close()
-                    except: pass
-            except: pass
+            # 🚀 SPEED FIX: Only update LR/entropy every 10 iterations (values barely change between consecutive iters)
+            if i % 10 == 0:
+                progress = min(1.0, i / max(1, TOTAL_ITERS))
+                new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)
+                new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)
+                new_ent = 0.015 * (1.0 - 0.9 * progress)
+                
+                try:
+                    if hasattr(learner.ppo_learner, 'optimizer'):
+                        for param_group in learner.ppo_learner.optimizer.param_groups: 
+                            param_group['lr'] = new_policy_lr
+                    else:
+                        for param_group in learner.ppo_learner.policy_optimizer.param_groups: param_group['lr'] = new_policy_lr
+                        for param_group in learner.ppo_learner.value_optimizer.param_groups: param_group['lr'] = new_critic_lr
+                except Exception:
+                    pass
+                
+                learner.ppo_ent_coef = new_ent
+                learner.ppo_learner.ent_coef = new_ent
 
             if (i + 1) > start_iter and (i + 1) % 50 == 0:
+                # 🚀 SPEED FIX: Return file I/O only during reporting (was running EVERY iteration before!)
+                try:
+                    return_files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.startswith("rlgym_returns_")]
+                    for rf in return_files:
+                        try:
+                            with open(rf, "r") as f:
+                                lines = f.readlines()
+                                for line in lines:
+                                    if line.strip():
+                                        ep_returns_queue.append(float(line.strip()))
+                            open(rf, 'w').close()
+                        except: pass
+                except: pass
                 print("\n" + "═"*60)
                 print(f"📊 --- ITERATION {i+1} REWARD ORACLE SNAPSHOT ---")
                 
