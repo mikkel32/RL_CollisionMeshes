@@ -117,50 +117,47 @@ def ensure_collision_meshes():
     print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
 
 class ReturnTrackerWrapper(gym.Wrapper):
-    """🧠 FAILSAFE: Intercepts raw rewards directly from the environment to prevent N/A metrics"""
+    """🚀 V168: Buffers returns in RAM, writes to disk in bulk to prevent OS thread locks."""
     def __init__(self, env):
         super().__init__(env)
         self.current_return = 0.0
         self.pid = os.getpid()
+        self.return_buffer = []
 
     def reset(self, **kwargs):
-        if self.current_return != 0.0:
-            try:
-                with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
-                    f.write(f"{self.current_return}\n")
-            except: pass
+        self._flush_buffer(force=False)
         self.current_return = 0.0
         return self.env.reset(**kwargs)
 
     def step(self, action):
         step_returns = self.env.step(action)
-        obs = step_returns[0]
         reward = step_returns[1]
         done = step_returns[2]
         
-        if isinstance(reward, (list, tuple, np.ndarray)):
-            r_val = float(reward[0])
-        else:
-            r_val = float(reward)
-            
-        self.current_return += r_val
+        self.current_return += float(reward[0] if isinstance(reward, (list, tuple, np.ndarray)) else reward)
         
         if done:
-            try:
-                with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
-                    f.write(f"{self.current_return}\n")
-            except: pass
+            self.return_buffer.append(f"{self.current_return}")
             self.current_return = 0.0
+            self._flush_buffer(force=False)
             
         return step_returns
+
+    def _flush_buffer(self, force=False):
+        if len(self.return_buffer) >= 50 or (force and len(self.return_buffer) > 0):
+            try:
+                with open(f"/tmp/rlgym_returns_{self.pid}.txt", "a") as f:
+                    f.write("\n".join(self.return_buffer) + "\n")
+                self.return_buffer.clear()
+            except: pass
 
 class ActionDelayWrapper(gym.Wrapper):
     def __init__(self, env, action_parser, min_delay=0, max_delay=1):
         super().__init__(env)
         self.min_delay = min_delay
         self.max_delay = max_delay
-        self.action_buffer = []
-        self.current_delay = 0
+        # 🚀 V168: deque makes popleft() O(1) instead of list.pop(0) O(N)
+        self.action_buffer = collections.deque(maxlen=max_delay + 1)
         self.idle_action_idx = action_parser.get_idle_action_idx()
 
     def reset(self, **kwargs):
@@ -169,7 +166,7 @@ class ActionDelayWrapper(gym.Wrapper):
         return self.env.reset(**kwargs)
 
     def step(self, action):
-        action_arr = np.array(action, copy=True)
+        action_arr = np.array(action, copy=False)
         if len(self.action_buffer) == 0 and self.current_delay > 0:
             idle_arr = np.full_like(action_arr, self.idle_action_idx)
             for _ in range(self.current_delay):
@@ -177,11 +174,8 @@ class ActionDelayWrapper(gym.Wrapper):
 
         self.action_buffer.append(action_arr)
         
-        if len(self.action_buffer) > self.current_delay:
-            delayed_action = self.action_buffer.pop(0)
-        else:
-            delayed_action = self.action_buffer[0] 
-            
+        # O(1) instant extraction
+        delayed_action = self.action_buffer.popleft() if len(self.action_buffer) > self.current_delay else self.action_buffer[0]
         return self.env.step(delayed_action)
 
 class PhysicsRandomizationMutator(StateSetter):
@@ -224,7 +218,7 @@ class SOTAActionParser(ActionParser):
         self._lookup_table = np.array(self._make_bins(), dtype=np.float32)
 
     def _make_bins(self):
-        """⭐ HIGHLIGHT: Pruned down to speed up Neural Convergence."""
+        """⭐ V168: Wave-dash enabled, only physically contradictory combos pruned."""
         bins = []
         for throttle in [-1.0, 0.0, 1.0]:
             for steer_yaw in [-1.0, 0.0, 1.0]:
@@ -233,21 +227,19 @@ class SOTAActionParser(ActionParser):
                         for jump in [0.0, 1.0]:
                             for boost in [0.0, 1.0]:
                                 for handbrake in [0.0, 1.0]:
-                                    # 🛑 SMART PRUNING LOGIC:
-                                    if jump == 1 and handbrake == 1: 
-                                        continue # Handbrake does nothing while jumping
+                                    # 🛑 SMART PRUNING:
                                     if pitch != 0 and throttle == -1.0: 
-                                        continue # Reverse throttle in air is mathematically useless
+                                        continue # Reverse throttle in air is useless
                                     if boost == 1 and throttle == -1.0:
                                         continue # Boosting while reversing is contradictory
-                                        
+                                    
+                                    # 🚨 V168: KEEP jump+handbrake! Required for wave-dashes & recoveries!
                                     bins.append([throttle, steer_yaw, pitch, steer_yaw, roll, jump, boost, handbrake])
         return bins
         
     def get_idle_action_idx(self):
         for i, b in enumerate(self._lookup_table):
-            if np.all(b == 0.0):
-                return i
+            if np.all(b == 0.0): return i
         return 0
 
     def get_action_space(self) -> gym.spaces.Space:
@@ -255,9 +247,8 @@ class SOTAActionParser(ActionParser):
 
     def parse_actions(self, actions: Any, state: GameState) -> np.ndarray:
         actions = np.asarray(actions, dtype=np.int32).flatten()
-        actions = np.clip(actions, 0, len(self._lookup_table) - 1)
-        parsed = self._lookup_table[actions].copy()
-        return parsed
+        # 🚀 V168: Removed .copy() - saves RAM allocation overhead
+        return self._lookup_table[np.clip(actions, 0, len(self._lookup_table) - 1)]
 
 # ------------------------------------------------------------------------------
 # 3. ULTRA-FAST OBSERVATION BUILDER
@@ -327,10 +318,12 @@ class TemporalMemoryObservation(ObsBuilder):
 
         true_bx, true_by, true_bz = state.ball.position
 
+        # 🚀 V168: Skip lambda sorting in 1v1 (only 1 opponent, sorting is waste)
         opponents = [other for other in state.players if other.team_num != player.team_num]
-        opponents.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
-                                     (x.car_data.position[1]-true_by)**2 + 
-                                     (x.car_data.position[2]-true_bz)**2)
+        if len(opponents) > 1:
+            opponents.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
+                                         (x.car_data.position[1]-true_by)**2 + 
+                                         (x.car_data.position[2]-true_bz)**2)
         
         added_opps = 0
         for other in opponents:
@@ -367,9 +360,10 @@ class TemporalMemoryObservation(ObsBuilder):
             obs.extend([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         teammates = [other for other in state.players if other.team_num == player.team_num and other.car_id != player.car_id]
-        teammates.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
-                                     (x.car_data.position[1]-true_by)**2 + 
-                                     (x.car_data.position[2]-true_bz)**2)
+        if len(teammates) > 1:
+            teammates.sort(key=lambda x: (x.car_data.position[0]-true_bx)**2 + 
+                                         (x.car_data.position[1]-true_by)**2 + 
+                                         (x.car_data.position[2]-true_bz)**2)
         
         added_tm8s = 0
         for other in teammates:
@@ -571,16 +565,34 @@ class DynamicBoostReward(RewardFunction):
             rew = (current_boost - last_b) * (1.0 + starvation_mult) * 2.0
         return float(rew)
 
-# ⭐ V167: TOUCH QUALITY REWARD (replaces CompoundAerialReward)
-class TouchBallReward(RewardFunction):
-    """Rewards touching the ball, scaled by resulting ball speed (strong hits > weak taps)."""
+# 🌟 V168: KINESTHETIC AERIAL REWARD (height-scaled power hits + aerial breadcrumbs)
+class KinestheticAerialReward(RewardFunction):
+    """🧠 Multiplies kinetic energy transfer by exponential altitude. Ground hits still rewarded."""
     def reset(self, initial_state: GameState): pass
+    
     def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        reward = 0.0
+        
+        # 1. Breadcrumb: Cure aerial phobia (tiny reward for sustained air time)
+        if not player.on_ground and player.car_data.position[2] > 300.0:
+            reward += 0.005  
+            
+        # 2. The Payload: Height-Scaled Power Hit
         if player.ball_touched:
+            bz = state.ball.position[2]
             bvx, bvy, bvz = state.ball.linear_velocity
+            
+            height_frac = max(0.0, min(bz / 2044.0, 1.0))
             ball_speed = math.sqrt(bvx**2 + bvy**2 + bvz**2)
-            return float(min(1.0, ball_speed / 4600.0))
-        return 0.0
+            speed_frac = min(1.0, ball_speed / 4600.0)
+            
+            # Aerial hits get exponential multiplier, ground hits get standard reward
+            if height_frac > 0.15:
+                reward += (10.0 * speed_frac) * (1.0 + (height_frac ** 2))
+            else:
+                reward += (2.0 * speed_frac)
+                
+        return float(reward)
 
 # ------------------------------------------------------------------------------
 # 5. CURRICULUM MUTATORS (⭐ HIGHLIGHT: AERIAL INTERCEPT INJECTED)
@@ -675,7 +687,7 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ V168: TOUCH-FIRST REWARD STRUCTURE (Touching ball is 100x more valuable than proximity)
+    # ⭐ V168: KINESTHETIC REWARD STRUCTURE (Touch/Aerial KING, proximity breadcrumbs only)
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=5.0), 
@@ -683,14 +695,14 @@ def build_env():
             PositionToShootReward(),               # Get behind ball, facing opponent goal
             FearlessPlayerToBallReward(),          # Breadcrumb: drive towards the ball
             FaceAndChaseReward(),                  # Breadcrumb: align with ball direction
-            TouchBallReward(),                     # ⭐ V168 KING: Strong ball hits >> everything
+            KinestheticAerialReward(),             # 🌟 V168: Height-scaled power hits + aerial breadcrumbs
             DynamicBoostReward()                   # ⛽ Learn to path over pads
         ),
-        # V168 WEIGHTS: Touch DOMINATES. Proximity is breadcrumbs only.
-        # [Event,  BallToNet, Position, PlayerToBall, FaceChase, Touch, Boost]
-        (1.0,     3.0,       0.3,      0.1,          0.05,      10.0,  0.2),
+        # V168 WEIGHTS: Touch/Aerial DOMINATES. Proximity is breadcrumbs only.
+        # [Event,  BallToNet, Position, PlayerToBall, FaceChase, Kinesthetic, Boost]
+        (1.0,     3.0,       0.3,      0.1,          0.05,      10.0,        0.2),
         
-        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Touch", "Boost"]
+        names=["Goal/Event", "BallToNet", "Position", "PlayerToBall", "FaceAndChase", "Aerial/Touch", "Boost"]
     )
     
     action_parser = SOTAActionParser()
