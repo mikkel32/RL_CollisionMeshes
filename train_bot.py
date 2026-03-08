@@ -400,9 +400,9 @@ class TrackedCombinedReward(RewardFunction):
             total_reward += r
             
         self.steps += 1
-        if self.steps % 100000 == 0:
+        if self.steps % 25000 == 0:
             try:
-                avg_stats = {self.names[i]: self._fast_stats[i]/100000 for i in range(self.num_funcs)}
+                avg_stats = {self.names[i]: self._fast_stats[i]/25000 for i in range(self.num_funcs)}
                 with open(f"/tmp/rlgym_reward_telemetry_{os.getpid()}.json", "w") as f:
                     json.dump(avg_stats, f)
                 self._fast_stats = [0.0] * self.num_funcs
@@ -639,7 +639,7 @@ if __name__ == "__main__":
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
     GLOBAL_BATCH_SIZE = 32_768       # 🚀 Fast turnaround (updates brain 2x faster in wall-clock)
-    EXP_BUFFER = 32_768              # 🚀 Strictly ON-POLICY (no stale off-policy gradients)
+    EXP_BUFFER = 98_304              # 🧠 3x batch = data diversity without staleness
     MINI_BATCH = 16_384              # 🚀 Exactly 2 splits for Ampere GPUs
     
     BASE_ITERS = 15000
@@ -653,7 +653,7 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.015,          # 🧠 AI FIX: Forces early jump exploration (decays to 0.0015)
+        ppo_ent_coef=0.01,           # 🧠 AI FIX: 0.01 * ln(540) = 0.063 — below reward signal so policy actually learns
         gae_gamma=0.995,             # 🧠 AI FIX: Extended patience for 2-4 second aerial flights
         
         standardize_obs=False,
@@ -662,10 +662,10 @@ if __name__ == "__main__":
         policy_lr=5e-4,
         critic_lr=5e-4,
         
-        ppo_epochs=2,              # 🚀 SPEED FIX: Less backprop per iteration
+        ppo_epochs=3,              # 🧠 AI FIX: More gradient passes → KL/clip registers properly
         
-        policy_layer_sizes=(256, 256),       # 2 layers sufficient for 92-dim 1v1
-        critic_layer_sizes=(256, 256),       # 🚀 Removed 3rd layer (33% faster backprop)
+        policy_layer_sizes=(256, 256),         # 2 layers sufficient for 92-dim 1v1
+        critic_layer_sizes=(256, 256, 256),    # 🧠 AI FIX: 3 layers needed for accurate value estimation
         
         device="cuda" if torch.cuda.is_available() else "cpu",
         log_to_wandb=False
@@ -797,7 +797,7 @@ if __name__ == "__main__":
                 progress = min(1.0, i / max(1, TOTAL_ITERS))
                 new_policy_lr = 5e-4 * (1.0 - 0.8 * progress)
                 new_critic_lr = 5e-4 * (1.0 - 0.8 * progress)
-                new_ent = 0.015 * (1.0 - 0.9 * progress)
+                new_ent = 0.01 * (1.0 - 0.9 * progress)         # 0.01 → 0.001
                 
                 try:
                     if hasattr(learner.ppo_learner, 'optimizer'):
