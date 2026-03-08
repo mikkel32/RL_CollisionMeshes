@@ -445,7 +445,7 @@ class MonolithicSOTAReward(RewardFunction):
             if align > 0:
                 reward += (align * (vel_to_ball * INV_2300)) * self.weights["face"]
 
-        # --- POSITION TO SHOOT ---
+        # --- POSITION TO SHOOT (Speed-Gated Anti-Park Fix) ---
         gy = 5120.0 if player.team_num == 0 else -5120.0
         b2gx, b2gy = 0.0 - bx, gy - by
         b2g_mag = math.sqrt(b2gx*b2gx + b2gy*b2gy)
@@ -453,7 +453,9 @@ class MonolithicSOTAReward(RewardFunction):
         if b2g_mag > 0 and p2b_mag > 0:
             alignment = (dx*b2gx + dy*b2gy) / (p2b_mag * b2g_mag)
             if alignment > 0:
-                reward += alignment * self.weights["pos"]
+                # 🛑 SURGICAL FIX: Speed multiplier (0→1). Parking = 0 reward.
+                speed_multiplier = max(0.0, min(1.0, vel_to_ball * INV_2300))
+                reward += (alignment * speed_multiplier) * self.weights["pos"]
 
         # --- KINESTHETIC AERIAL JACKPOT ---
         # 🛑 AI FIX: "vel_to_ball > 0" prevents the jumping bean exploit!
@@ -579,12 +581,12 @@ def build_env():
     # ⭐ V168: MONOLITHIC REWARD STRUCTURE (3 reward calls instead of 7)
     reward_fn = TrackedCombinedReward(
         (
-            EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=5.0), 
+            EventReward(goal=200.0, concede=-100.0, shot=25.0, save=30.0, demo=5.0, touch=10.0), 
             VelocityBallToGoalReward(),            # Force the ball towards the net!
             MonolithicSOTAReward()                  # 🚀 Fused: Fearless+Face+Position+Aerial+Boost
         ),
         # [Event,  BallToNet, Monolithic]
-        (1.0,     3.0,       1.0),
+        (1.0,     1.5,       1.0),    # 🛑 BallToNet 3.0→1.5 (reduces early-touch penalty trauma)
         
         names=["Goal/Event", "BallToNet", "Monolithic"]
     )
@@ -598,7 +600,7 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(150)]
+        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(300)]
     )
     
     # 🚀 SPEED FIX: Removed ActionDelayWrapper — saves full Python function call per step
