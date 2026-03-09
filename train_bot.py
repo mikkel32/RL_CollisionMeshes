@@ -596,11 +596,8 @@ def build_env():
     action_parser = SOTAActionParser()
     robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
     
-    from rlgym_sim.utils.gamestates.opponent_selection import HardbotOpponent
-
     env = rlgym_sim.make(
-        tick_skip=8, team_size=1, spawn_opponents=True,
-        opponent_selection=HardbotOpponent(0.8), # 🧠 PHASE 3: HARDBOT SELF-PLAY
+        tick_skip=8, team_size=1, spawn_opponents=True, # 🧠 PHASE 3: NATIVE SELF-PLAY
         reward_fn=reward_fn, 
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
