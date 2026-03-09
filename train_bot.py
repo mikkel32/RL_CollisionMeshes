@@ -644,7 +644,7 @@ if __name__ == "__main__":
     
     GLOBAL_BATCH_SIZE = 32_768       
     EXP_BUFFER = 1_000_000           # 🧠 OVERDRIVE: 1 Million Step Experience Buffer
-    MINI_BATCH = 50_000              # ⚡ SPEED FIX: Tripled minibatch size to offset computation
+    MINI_BATCH = 32_768              # ⚡ SPEED FIX: Maximize minibatch to a 1:1 ratio with global batch
     
     BASE_ITERS = 15000
     EXTENSION_STEP = 40000           # 🧠 PHASE 3: Fusion Protocol pushes to 100,000 iterations
