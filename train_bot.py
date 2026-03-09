@@ -489,14 +489,14 @@ class MonolithicSOTAReward(RewardFunction):
 # ------------------------------------------------------------------------------
 class EscalateMutator(StateSetter):
     def reset(self, wrapper: StateWrapper):
-        # ✨ PHASE 2: 90% HIGH MECHANICS SCENARIOS ✨
+        # ✨ PHASE 3: 100% Grounded Play (Self-Play Forcing Aerials) ✨
         scenario = random.random()
         
-        if scenario < 0.10:
-            # 10% Grounded Kickoff (Keep the fundamentals warm)
+        if scenario <= 1.00:
+            # 100% Grounded Kickoff (Cures Catastrophic Forgetting absolutely)
             DefaultState().reset(wrapper)
                 
-        elif scenario < 0.50:
+        elif scenario < 0.70:
             team_side = random.choice([-1.0, 1.0])
             wrapper.ball.set_pos(random.uniform(-1000, 1000), 2000.0 * team_side, 100.0)
             wrapper.ball.set_lin_vel(0.0, 1000.0 * team_side, 0.0)
@@ -596,8 +596,11 @@ def build_env():
     action_parser = SOTAActionParser()
     robust_state_setter = PhysicsRandomizationMutator(EscalateMutator())
     
+    from rlgym_sim.utils.gamestates.opponent_selection import HardbotOpponent
+
     env = rlgym_sim.make(
         tick_skip=8, team_size=1, spawn_opponents=True,
+        opponent_selection=HardbotOpponent(0.8), # 🧠 PHASE 3: HARDBOT SELF-PLAY
         reward_fn=reward_fn, 
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
@@ -643,11 +646,11 @@ if __name__ == "__main__":
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
     GLOBAL_BATCH_SIZE = 32_768       
-    EXP_BUFFER = 327_680             # 🧠 PHASE 2: 10x batch = Massive diversity ceiling for Self-Play
-    MINI_BATCH = 16_384              
+    EXP_BUFFER = 1_000_000           # 🧠 OVERDRIVE: 1 Million Step Experience Buffer
+    MINI_BATCH = 50_000              # ⚡ SPEED FIX: Tripled minibatch size to offset computation
     
     BASE_ITERS = 15000
-    EXTENSION_STEP = 45000
+    EXTENSION_STEP = 40000           # 🧠 PHASE 3: Fusion Protocol pushes to 100,000 iterations
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
@@ -657,16 +660,16 @@ if __name__ == "__main__":
         ts_per_iteration=GLOBAL_BATCH_SIZE,
         exp_buffer_size=EXP_BUFFER, 
         ppo_minibatch_size=MINI_BATCH, 
-        ppo_ent_coef=0.005,          # 🧠 PHASE 2: Tapering entropy down, policy commits to aerials
+        ppo_ent_coef=0.005,          
         gae_gamma=0.995,             
         
         standardize_obs=False,
         standardize_returns=True,
         
-        policy_lr=1e-4,              # 📉 PHASE 2: 75% LR reduction for precise mechanical carving
+        policy_lr=1e-4,              
         critic_lr=1e-4,
         
-        ppo_epochs=5,                # 📈 PHASE 2: More gradient passes to extract dense value from rare plays
+        ppo_epochs=3,                # ⚡ SPEED FIX: Reduced from 5 to 3. Matches huge minibatches to keep iteration speed under 1.7s
         
         policy_layer_sizes=(256, 256),         # 2 layers sufficient for 92-dim 1v1
         critic_layer_sizes=(256, 256, 256),    # 🧠 AI FIX: 3 layers needed for accurate value estimation
