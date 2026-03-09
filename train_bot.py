@@ -643,7 +643,7 @@ if __name__ == "__main__":
     WORKER_CORES = min(44, mp.cpu_count() - 4)  # 🚀 Use most Colab vCPUs, reserve 4 for PyTorch/OS
     
     GLOBAL_BATCH_SIZE = 32_768       
-    EXP_BUFFER = 1_000_000           # 🧠 OVERDRIVE: 1 Million Step Experience Buffer
+    EXP_BUFFER = 983_040             # 🧠 OVERDRIVE: Just under 1 Million (Perfectly divides by Mini-Batch)
     MINI_BATCH = 32_768              # ⚡ SPEED FIX: Maximize minibatch to a 1:1 ratio with global batch
     
     BASE_ITERS = 15000
@@ -666,7 +666,7 @@ if __name__ == "__main__":
         policy_lr=1e-4,              
         critic_lr=1e-4,
         
-        ppo_epochs=3,                # ⚡ SPEED FIX: Reduced from 5 to 3. Matches huge minibatches to keep iteration speed under 1.7s
+        ppo_epochs=1,                # ⚡ MAXIMUM SPEED FIX: 1 Epoch across 1 Million steps = 983k Operations (FASTER than the original 1.6M!)
         
         policy_layer_sizes=(256, 256),         # 2 layers sufficient for 92-dim 1v1
         critic_layer_sizes=(256, 256, 256),    # 🧠 AI FIX: 3 layers needed for accurate value estimation
