@@ -117,7 +117,7 @@ def ensure_collision_meshes():
     print(f"✅ Successfully routed perfectly formatted collision meshes to {target_dir}")
 
 class ReturnTrackerWrapper(gym.Wrapper):
-    """🚀 V169: Buffers returns in RAM, writes to disk in bulk to prevent OS thread locks."""
+    """🚀 V170: Buffers returns in RAM, writes to disk in bulk to prevent OS thread locks."""
     def __init__(self, env):
         super().__init__(env)
         self.current_return = 0.0
@@ -156,7 +156,7 @@ class ActionDelayWrapper(gym.Wrapper):
         super().__init__(env)
         self.min_delay = min_delay
         self.max_delay = max_delay
-        # 🚀 V169: deque makes popleft() O(1) instead of list.pop(0) O(N)
+        # 🚀 V170: deque makes popleft() O(1) instead of list.pop(0) O(N)
         self.action_buffer = collections.deque(maxlen=max_delay + 1)
         self.idle_action_idx = action_parser.get_idle_action_idx()
 
@@ -218,7 +218,7 @@ class SOTAActionParser(ActionParser):
         self._lookup_table = np.array(self._make_bins(), dtype=np.float32)
 
     def _make_bins(self):
-        """⭐ V169: Wave-dash enabled, only physically contradictory combos pruned."""
+        """⭐ V170: Wave-dash enabled, only physically contradictory combos pruned."""
         bins = []
         for throttle in [-1.0, 0.0, 1.0]:
             for steer_yaw in [-1.0, 0.0, 1.0]:
@@ -231,7 +231,7 @@ class SOTAActionParser(ActionParser):
                                     if boost == 1 and throttle == -1.0:
                                         continue # Boosting while reversing is contradictory
                                     
-                                    # 🚨 V169: KEEP jump+handbrake! Required for wave-dashes & recoveries!
+                                    # 🚨 V170: KEEP jump+handbrake! Required for wave-dashes & recoveries!
                                     bins.append([throttle, steer_yaw, pitch, steer_yaw, roll, jump, boost, handbrake])
         return bins
         
@@ -255,7 +255,7 @@ class TemporalMemoryObservation(ObsBuilder):
     def __init__(self, action_parser: ActionParser, history_size=1):
         super().__init__()
         self.action_parser = action_parser
-        # 🚀 V169: 1v1 only — no wasted slots for missing players
+        # 🚀 V170: 1v1 only — no wasted slots for missing players
         self.MAX_OPPONENTS = 1
         self.MAX_TEAMMATES = 0
         self._lookup_len = len(action_parser._lookup_table)
@@ -411,7 +411,7 @@ class TrackedCombinedReward(RewardFunction):
         return total_reward
 
 
-# 🚀 V169: MONOLITHIC GOD-REWARD (Fuses 5 spatial/aerial rewards into one O(1) pass)
+# 🚀 V170: MONOLITHIC GOD-REWARD (Fuses 5 spatial/aerial rewards into one O(1) pass)
 class MonolithicSOTAReward(RewardFunction):
     """🚀 3x FASTER: Combines Fearless, FaceChase, Position, Aerial, Boost into one math block."""
     def __init__(self):
@@ -580,7 +580,7 @@ def build_env():
     random.seed(seed)
     np.random.seed(seed)
 
-    # ⭐ V169 PHASE 2: FINE-TUNING REWARD STRUCTURE
+    # ⭐ V170 PHASE 2: FINE-TUNING REWARD STRUCTURE
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=200.0, concede=-100.0, shot=25.0, save=80.0, demo=5.0, touch=5.0), # Touch tapered, Save massively buffed
@@ -611,7 +611,7 @@ def build_env():
     return env
 
 # ------------------------------------------------------------------------------
-# 7. SOTA V169 MAIN PPO ENGINE
+# 7. SOTA V170 MAIN PPO ENGINE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
@@ -626,7 +626,7 @@ if __name__ == "__main__":
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
-    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V169)...")
+    print("🚀 Initializing THE SIM-TO-REAL APEX PREDATOR (V170)...")
     
     try:
         temp_env = build_env()
@@ -841,7 +841,7 @@ if __name__ == "__main__":
 
                 print(f"PPO Avg Reward/Ep:    {avg_reward}")
                 
-                # 🛑 V169: Direct key extraction from rlgym_ppo's learn() report
+                # 🛑 V170: Direct key extraction from rlgym_ppo's learn() report
                 # Known keys: "Policy Entropy", "Value Function Loss", "Policy Update Magnitude",
                 #              "SB3 Clip Fraction", "Mean KL Divergence", "Cumulative Model Updates"
                 p_update, v_loss, ent, kl_div, clip_frac = "N/A", "N/A", "N/A", "N/A", "N/A"
@@ -895,7 +895,7 @@ if __name__ == "__main__":
                 print(f"\n💾 Initiating Cloud Backup for Iteration {i+1}...")
                 os.makedirs(ckpt_dir, exist_ok=True)
                 
-                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V169_{i+1}")
+                ckpt_folder = os.path.join(ckpt_dir, f"ckpt_V170_{i+1}")
                 os.makedirs(ckpt_folder, exist_ok=True)
                 
                 try:
@@ -920,7 +920,7 @@ if __name__ == "__main__":
                     fallback_path = os.path.join(ckpt_dir, f"raw_policy_weights_{i+1}.pt")    
                     torch.save(policy_net.state_dict(), fallback_path)
                     
-                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V169_Iter_{i+1}.onnx")
+                    onnx_path = os.path.join(ckpt_dir, f"SOTA_RLBot_V170_Iter_{i+1}.onnx")
                     dummy_in = torch.randn(1, obs_size, dtype=torch.float32, device=device_net)
                     
                     onnx_safe_policy = RLBotONNXWrapper(policy_net).eval()
@@ -955,8 +955,8 @@ if __name__ == "__main__":
         dummy_input = torch.randn(1, obs_size, dtype=torch.float32, device="cpu")
         
         save_dir = "/content/drive/MyDrive/RocketLeagueModel"
-        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V169_Final.onnx")
-        export_path_fallback = "SOTA_RLBot_V169_FALLBACK.onnx"
+        export_path_drive = os.path.join(save_dir, "SOTA_RLBot_V170_Final.onnx")
+        export_path_fallback = "SOTA_RLBot_V170_FALLBACK.onnx"
         
         try:
             os.makedirs(save_dir, exist_ok=True)
