@@ -602,7 +602,8 @@ def build_env():
         obs_builder=TemporalMemoryObservation(action_parser=action_parser, history_size=1),
         action_parser=action_parser, 
         state_setter=robust_state_setter,
-        terminal_conditions=[TimeoutCondition(1500), GoalScoredCondition(), NoTouchTimeoutCondition(300)]
+        # 🧠 PHASE 4: Open-Play Mastery. 4500 Ticks (37.5s match time) | 600 Ticks (5s of inactivity before reset)
+        terminal_conditions=[TimeoutCondition(4500), GoalScoredCondition(), NoTouchTimeoutCondition(600)]
     )
     
     # 🚀 SPEED FIX: Removed ActionDelayWrapper — saves full Python function call per step
@@ -647,7 +648,7 @@ if __name__ == "__main__":
     MINI_BATCH = 32_768              # ⚡ SPEED FIX: Maximize minibatch to a 1:1 ratio with global batch
     
     BASE_ITERS = 15000
-    EXTENSION_STEP = 40000           # 🧠 PHASE 3: Fusion Protocol pushes to 100,000 iterations
+    EXTENSION_STEP = 80000           # 🧠 PHASE 4: Extended Mastery (40k for Fusion + 40k for Open-Play mechanics)
     TOTAL_ITERS = BASE_ITERS
     
     learner = Learner(
