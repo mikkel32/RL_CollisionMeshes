@@ -467,13 +467,25 @@ class MonolithicSOTAReward(RewardFunction):
             ball_speed = math.sqrt(bvx*bvx + bvy*bvy + bvz*bvz)
             speed_frac = min(1.0, ball_speed * INV_4600)
             
-            if height_frac > 0.15:
-                if player.on_ground:  # 🛑 PENALIZE WALL-FARMING: touching ball high while on wall = ground reward only
-                    reward += (2.0 * speed_frac) * self.weights["aer"]
-                else:  # ✅ TRUE AERIAL JACKPOT
-                    reward += ((10.0 * speed_frac) * (1.0 + (height_frac * height_frac))) * self.weights["aer"]
+            if height_frac > 0.15 and not player.on_ground:
+                # TRUE GC AERIAL JACKPOT: 
+                # Exponentially scale based on height AND kinetic energy transfer
+                # (squaring height_frac means high aerials give massively more than low ones)
+                reward += (15.0 * speed_frac * (height_frac ** 2)) * self.weights["aer"]
             else:
+                # Standard ground touch
                 reward += (2.0 * speed_frac) * self.weights["aer"]
+
+        # --- RECOVERY & MOMENTUM (The Half-Flip Enforcer) ---
+        forward_velocity = (vx*fx + vy*fy + vz*fz)
+        if player.on_ground and forward_velocity < -100.0:
+            reward -= 0.01  # Constant negative pressure forces half-flips!
+
+        # --- PROPER LANDING (Wave Dash Setup) ---
+        if not player.on_ground and pz < 300.0 and vz < 0: # Falling towards ground
+            z_alignment = player.car_data.up()[2] # How "upright" the car is (World Z)
+            if z_alignment > 0.8:
+                reward += 0.005 # Reward preparing for a clean 4-wheel landing to conserve momentum
 
         # --- DYNAMIC BOOST ---
         cb = player.boost_amount
@@ -482,6 +494,47 @@ class MonolithicSOTAReward(RewardFunction):
         if cb > lb + 0.01:
             reward += ((cb - lb) * (2.0 - lb) * 2.0) * self.weights["bst"]
 
+        return float(reward)
+
+# 🚀 V170: KINETIC GOAL BONUS (Exponential scaling for scoring FAST goals)
+class KineticGoalBonus(RewardFunction):
+    """🚀 Rewards bangers. Punishes slow rollers. Extracts ball velocity from the frame prior to goal explosion."""
+    def __init__(self, speed_multiplier=2500.0):
+        super().__init__()
+        self.speed_multiplier = speed_multiplier
+        self.last_goals = {}
+        self.last_ball_speed = 0.0
+
+    def reset(self, initial_state: GameState):
+        self.last_goals.clear()
+        self.last_ball_speed = 0.0
+
+    def get_reward(self, player: PlayerData, state: GameState, prev_action: np.ndarray) -> float:
+        reward = 0.0
+        
+        bvx, bvy, bvz = state.ball.linear_velocity
+        current_ball_speed = math.sqrt(bvx*bvx + bvy*bvy + bvz*bvz)
+
+        current_goals = player.match_goals
+        last_g = self.last_goals.get(player.car_id, current_goals)
+        
+        if current_goals > last_g:
+            # Fraction of max speed (0.0 to 1.0) based on the frame BEFORE the goal explosion
+            speed_frac = min(1.0, max(0.0, self.last_ball_speed * INV_4600))
+            
+            # Exponential scaling:
+            # 165 km/h shot (speed_frac 1.0) -> +2500 Bonus
+            # 100 km/h shot (speed_frac 0.6) -> +900 Bonus
+            #  30 km/h roller(speed_frac 0.2) -> +100 Bonus
+            reward += (speed_frac ** 2) * self.speed_multiplier
+            
+        self.last_goals[player.car_id] = current_goals
+        
+        # Rocket League physics lock ball velocity slightly after goals.
+        # We only update last_ball_speed if it's moving, ensuring we capture the exact impact speed.
+        if current_ball_speed > 10.0:
+            self.last_ball_speed = current_ball_speed
+            
         return float(reward)
 
 # ------------------------------------------------------------------------------
@@ -584,13 +637,14 @@ def build_env():
     reward_fn = TrackedCombinedReward(
         (
             EventReward(goal=200.0, concede=-100.0, shot=25.0, save=80.0, demo=5.0, touch=5.0), # Touch tapered, Save massively buffed
+            KineticGoalBonus(speed_multiplier=2500.0), # 🚀 FUSION: Exponential Rewards for 100+ km/h Banger Shots
             VelocityBallToGoalReward(),            # Force the ball towards the net!
             MonolithicSOTAReward()                 # 🚀 Fused: Fearless+Face+Position+Aerial+Boost
         ),
-        # [Event,  BallToNet, Monolithic]
-        (1.0,     2.5,       0.5),    # 🛑 Monolithic tapered down to 0.5, BallToNet buffed to 2.5
+        # [Event,  KineticGoal, BallToNet, Monolithic]
+        (1.0,     1.0,          2.5,       0.5),    # 🛑 Monolithic tapered down to 0.5, BallToNet buffed to 2.5
         
-        names=["Goal/Event", "BallToNet", "Monolithic"]
+        names=["Goal/Event", "KineticGoal", "BallToNet", "Monolithic"]
     )
     
     action_parser = SOTAActionParser()
@@ -606,7 +660,9 @@ def build_env():
         terminal_conditions=[TimeoutCondition(4500), GoalScoredCondition(), NoTouchTimeoutCondition(600)]
     )
     
-    # 🚀 SPEED FIX: Removed ActionDelayWrapper — saves full Python function call per step
+    # 🧠 PHASE 5: ADVERSARIAL DOMAIN RANDOMIZATION
+    # Force the AI to learn predictive momentum to survive live-client desynchronization
+    env = ActionDelayWrapper(env, action_parser, min_delay=0, max_delay=1) # 0 to ~16ms delay
     env = ReturnTrackerWrapper(env)
     return env
 
